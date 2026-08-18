@@ -5,6 +5,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
+use super::deps;
 use super::filesystem::copy_project;
 use super::worktree;
 
@@ -54,7 +55,11 @@ impl ShadowManager {
         if worktree::is_git_repo(&self.project_root) {
             let sha = worktree::head_sha(&self.project_root)?;
             worktree::add_worktree(&self.project_root, &dest, &sha)?;
-            info!("shadow {run_id} created (worktree @ {})", &sha[..12.min(sha.len())]);
+            let lent = deps::lend_installed(&self.project_root, &dest);
+            info!(
+                "shadow {run_id} created (worktree @ {}, {lent} dependency folders lent)",
+                &sha[..12.min(sha.len())]
+            );
             Ok(Shadow {
                 run_id: run_id.to_owned(),
                 path: dest,
@@ -64,7 +69,8 @@ impl ShadowManager {
             })
         } else {
             copy_project(&self.project_root, &dest)?;
-            info!("shadow {run_id} created (copy)");
+            let lent = deps::lend_installed(&self.project_root, &dest);
+            info!("shadow {run_id} created (copy, {lent} dependency folders lent)");
             Ok(Shadow {
                 run_id: run_id.to_owned(),
                 path: dest,

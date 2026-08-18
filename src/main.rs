@@ -3,6 +3,7 @@
 //! Sprint 1 surface:
 //!   navin-engine inspect [PATH]   discovery, prints the ProjectManifest
 //!   navin-engine daemon [PATH]    run the Evolve daemon for a workspace
+//!   navin-engine mcp [PATH]       serve the engine over MCP on stdio
 //!   navin-engine status [PATH]    query a running daemon over IPC
 //! Sprint 2 surface:
 //!   navin-engine baseline [PATH]  measure build/startup/latency/CPU/RSS
@@ -51,6 +52,12 @@ enum Command {
     },
     /// Run the Evolve daemon for a workspace.
     Daemon {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    /// Serve the engine as an MCP server on stdin/stdout, for any AI coding
+    /// environment that speaks the Model Context Protocol.
+    Mcp {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
@@ -302,9 +309,11 @@ fn init_logging() {
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_from_env("NAVIN_ENGINE_LOG")
         .unwrap_or_else(|_| EnvFilter::new("info"));
+    // Logs go to stderr so stdout stays a clean machine-readable report.
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)
+        .with_writer(std::io::stderr)
         .init();
 }
 
@@ -324,6 +333,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Daemon { path } => runtime()?.block_on(run_daemon(&path)),
+        Command::Mcp { path } => runtime()?.block_on(navin_engine::mcp::serve_stdio(path)),
         Command::Status { path } => {
             let root = path.canonicalize()?;
             let engine_dir = navin_engine::engine_dir(&root);
@@ -558,7 +568,8 @@ fn main() -> Result<()> {
                         config.evolve.generator.command.clone(),
                         Duration::from_secs(config.evolve.generator.timeout_secs),
                     )
-                    .with_preset(preset),
+                    .with_preset(preset)
+                    .about_app(Some(target.start_cmd.clone())),
                 )
             } else {
                 let list: Vec<FixCandidate> = match candidates {
@@ -619,7 +630,8 @@ fn main() -> Result<()> {
                         config.evolve.generator.command.clone(),
                         Duration::from_secs(config.evolve.generator.timeout_secs),
                     )
-                    .with_preset(preset),
+                    .with_preset(preset)
+                    .about_app(Some(target.start_cmd.clone())),
                 )
             } else {
                 Box::new(ProvidedPatchGenerator::new(Vec::new()))

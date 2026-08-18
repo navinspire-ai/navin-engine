@@ -10,4 +10,4 @@ pub mod topology;
 
 pub use detector::inspect_project;
 pub use manifest::ProjectManifest;
-pub use resolve::{start_command, suggested_ports};
+pub use resolve::{start_candidates, start_command, suggested_ports};

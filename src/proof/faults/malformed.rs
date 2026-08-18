@@ -29,7 +29,7 @@ pub async fn run(svc: &ServiceManager) -> FaultOutcome {
         {
             // Oversized header line.
             let mut buf = b"GET / HTTP/1.1\r\nX-Flood: ".to_vec();
-            buf.extend(std::iter::repeat(b'A').take(64 * 1024));
+            buf.extend(std::iter::repeat_n(b'A', 64 * 1024));
             buf.extend_from_slice(b"\r\n\r\n");
             buf
         },

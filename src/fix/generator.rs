@@ -23,6 +23,10 @@ struct FixRequest<'a> {
     engine_version: &'a str,
     project_root: String,
     finding: &'a Finding,
+    /// How the app under test starts. A monorepo holds many programs; without
+    /// this a generator cannot tell which one the numbers are about.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start_command: Option<&'a str>,
 }
 
 pub trait FixGenerator: Send + Sync {
@@ -70,15 +74,23 @@ pub struct BridgeGenerator {
     /// Model preset forwarded to the bridge as `NAVIN_BRIDGE_PRESET`, so an
     /// operator can pick the LLM per campaign without editing evolve.toml.
     preset: Option<String>,
+    /// The command that starts the app being measured, passed on so the
+    /// bridge can show the model that app rather than the whole repository.
+    start_command: Option<String>,
 }
 
 impl BridgeGenerator {
     pub fn new(command: impl Into<String>, timeout: Duration) -> Self {
-        BridgeGenerator { command: command.into(), timeout, preset: None }
+        BridgeGenerator { command: command.into(), timeout, preset: None, start_command: None }
     }
 
     pub fn with_preset(mut self, preset: Option<String>) -> Self {
         self.preset = preset.filter(|p| !p.trim().is_empty());
+        self
+    }
+
+    pub fn about_app(mut self, start_command: Option<String>) -> Self {
+        self.start_command = start_command.filter(|c| !c.trim().is_empty());
         self
     }
 }
@@ -94,6 +106,7 @@ impl FixGenerator for BridgeGenerator {
             engine_version: crate::ENGINE_VERSION,
             project_root: project_root.display().to_string(),
             finding,
+            start_command: self.start_command.as_deref(),
         };
         let payload = serde_json::to_vec(&request)?;
         let stdout = run_bridge(&self.command, &payload, self.timeout, self.preset.as_deref())
@@ -217,6 +230,15 @@ JSON"#;
         let out = gen.propose(&finding("crash.load"), Path::new("/tmp")).unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].id, "good");
+    }
+
+    #[test]
+    fn the_bridge_is_told_which_app_is_under_test() {
+        // The script refuses unless the request names the start command.
+        let script = "grep -q 'cd site && npm run dev' && echo '[]' || exit 3";
+        let gen = BridgeGenerator::new(script, Duration::from_secs(10))
+            .about_app(Some("cd site && npm run dev".to_owned()));
+        assert!(gen.propose(&finding("crash.load"), Path::new("/tmp")).is_ok());
     }
 
     #[test]

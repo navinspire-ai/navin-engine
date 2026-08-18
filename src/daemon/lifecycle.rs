@@ -69,6 +69,16 @@ impl Handler for DaemonHandler {
                     .map(|id| json!({ "job": id }))
                     .map_err(|message| (RpcErrorCode::Busy, message))
             }
+            "job.cancel" => {
+                let id = params
+                    .get("id")
+                    .and_then(Value::as_u64)
+                    .ok_or((RpcErrorCode::InvalidParams, "missing job id".to_owned()))?;
+                self.scheduler
+                    .cancel(id)
+                    .map(|was| json!({ "job": id, "cancelled": true, "was": was }))
+                    .map_err(|message| (RpcErrorCode::InvalidParams, message))
+            }
             other => Err((RpcErrorCode::UnknownMethod, format!("unknown method: {other}"))),
         }
     }

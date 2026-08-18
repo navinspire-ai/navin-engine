@@ -12,6 +12,7 @@ pub mod diagnose;
 pub mod evolve;
 pub mod fix;
 pub mod ipc;
+pub mod mcp;
 pub mod optimize;
 pub mod policy;
 pub mod progress;

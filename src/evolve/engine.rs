@@ -73,7 +73,7 @@ pub async fn run_evolve(
 
     // 3. Select the serious findings, worst-first, within the budget.
     let budget = config.evolve.budget.max_candidates as usize;
-    let cap = ctx.max_findings.min(budget).max(0);
+    let cap = ctx.max_findings.min(budget);
     let targets: Vec<_> = diagnosis
         .findings
         .iter()

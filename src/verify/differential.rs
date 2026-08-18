@@ -97,10 +97,9 @@ pub async fn discover_vectors(
 pub async fn capture(host: &str, port: u16, vectors: &[String]) -> Vec<Fingerprint> {
     let mut prints = Vec::with_capacity(vectors.len());
     for path in vectors {
-        let (status, body) = match fetch(host, port, path).await {
-            Ok(answer) => answer,
-            Err(_) => (0, Vec::new()), // Unreachable is comparable too.
-        };
+        // An unreachable app fingerprints as status 0 with an empty body,
+        // which compares just as well as a real answer.
+        let (status, body) = fetch(host, port, path).await.unwrap_or_default();
         prints.push(Fingerprint {
             path: path.clone(),
             status,

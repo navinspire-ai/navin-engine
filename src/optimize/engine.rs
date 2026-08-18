@@ -324,8 +324,8 @@ struct Measurement {
     fingerprints: Option<Vec<Fingerprint>>,
 }
 
-/// Shadow + optional patch + tests + invariants + behavioural fingerprints
-/// + repeated benchmark windows. The shadow is always destroyed; measurement
+/// Shadow, optional patch, tests, invariants, behavioural fingerprints and
+/// repeated benchmark windows. The shadow is always destroyed; measurement
 /// errors surface as a failed Result. Fingerprints are taken before the
 /// benchmark so every variant runs the identical sequence.
 async fn measure_patched(

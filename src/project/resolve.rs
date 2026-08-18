@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::Path;
 
-use super::manifest::{ProjectManifest, ProjectUnit, ServiceKind};
+use super::manifest::{ProjectManifest, ServiceKind};
 
 /// Default ports of the frameworks we recognise, used as first guesses
 /// when probing where an app answers.
@@ -34,9 +34,33 @@ const FRAMEWORK_PORTS: &[(&str, u16)] = &[
 /// A Procfile is the most explicit statement a project can make, so it
 /// wins. Otherwise the best unit answers, and a Makefile closes the march.
 pub fn start_command(root: &Path, manifest: &ProjectManifest) -> Option<String> {
-    procfile_web(root)
-        .or_else(|| unit_start(manifest))
-        .or_else(|| makefile_target(root))
+    start_candidates(root, manifest).into_iter().next()
+}
+
+/// Every way this project might start, most credible first.
+///
+/// One guess is not enough in a monorepo: the outermost runnable unit may
+/// be a website nobody installed while the service under test sits next to
+/// it. The engine tries them in order and keeps the one that answers.
+pub fn start_candidates(root: &Path, manifest: &ProjectManifest) -> Vec<String> {
+    let mut commands: Vec<String> = Vec::new();
+    let mut remember = |command: String| {
+        if !command.is_empty() && !commands.contains(&command) {
+            commands.push(command);
+        }
+    };
+    if let Some(command) = procfile_web(root) {
+        remember(command);
+    }
+    for unit in &manifest.units {
+        if let Some(command) = unit.commands.start.as_ref().or(unit.commands.dev.as_ref()) {
+            remember(in_unit_dir(&unit.path, command));
+        }
+    }
+    if let Some(command) = makefile_target(root) {
+        remember(command);
+    }
+    commands
 }
 
 /// Ports the project itself points at, best first. They are hints for the
@@ -56,19 +80,6 @@ pub fn suggested_ports(manifest: &ProjectManifest) -> Vec<u16> {
     }
     ports.dedup();
     ports
-}
-
-/// The outermost unit that knows how to run, preferring its production
-/// start over its dev server. Units arrive root-first, so a nested tool
-/// never outranks the application it belongs to.
-fn unit_start(manifest: &ProjectManifest) -> Option<String> {
-    manifest.units.iter().find_map(|unit: &ProjectUnit| {
-        unit.commands
-            .start
-            .as_ref()
-            .or(unit.commands.dev.as_ref())
-            .map(|cmd| in_unit_dir(&unit.path, cmd))
-    })
 }
 
 /// A command belonging to a sub-directory has to run there.
@@ -141,6 +152,23 @@ mod tests {
 
         let manifest = inspect_project(tmp.path()).unwrap();
         assert_eq!(start_command(tmp.path(), &manifest).as_deref(), Some("make serve"));
+    }
+
+    #[test]
+    fn every_runnable_unit_becomes_a_candidate() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("pyproject.toml"), "[project]\nname = \"api\"\n").unwrap();
+        for (dir, script) in [("site", "next dev"), ("admin", "vite")] {
+            let unit = tmp.path().join(dir);
+            fs::create_dir_all(&unit).unwrap();
+            fs::write(unit.join("package.json"), format!(r#"{{"scripts":{{"dev":"{script}"}}}}"#))
+                .unwrap();
+        }
+
+        let manifest = inspect_project(tmp.path()).unwrap();
+        let candidates = start_candidates(tmp.path(), &manifest);
+        assert!(candidates.contains(&"cd site && npm run dev".to_owned()), "{candidates:?}");
+        assert!(candidates.contains(&"cd admin && npm run dev".to_owned()), "{candidates:?}");
     }
 
     #[test]

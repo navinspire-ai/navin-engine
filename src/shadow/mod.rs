@@ -3,6 +3,7 @@
 //! filesystem copy is the fallback for non-git projects.
 
 pub mod cleanup;
+pub mod deps;
 pub mod filesystem;
 pub mod manager;
 pub mod sandbox;

@@ -127,16 +127,11 @@ impl Default for AllowedFamilies {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PromotionSection {
+    /// Merging someone else's branch is never automatic unless asked for.
     pub auto_merge: bool,
-}
-
-impl Default for PromotionSection {
-    fn default() -> Self {
-        PromotionSection { auto_merge: false }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

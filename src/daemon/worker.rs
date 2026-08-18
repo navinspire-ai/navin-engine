@@ -54,27 +54,45 @@ async fn job_target(
         .map_err(|e| format!("{e:#}"))
 }
 
-/// Build the candidate generator from policy: the configured bridge (with
-/// the operator's per-campaign model preset, when given) or none.
+/// Build the candidate generator: the project policy names the bridge when
+/// it wants a specific one, otherwise the caller's bridge is used. A desktop
+/// app can therefore offer optimize and evolve out of the box, while
+/// `.navin/evolve.toml` still has the last word on a project that pins one.
 fn make_generator(
     config: &EvolveConfig,
     preset: Option<String>,
+    offered: Option<String>,
+    start_command: Option<String>,
 ) -> Box<dyn crate::fix::FixGenerator> {
-    if config.evolve.generator.command.is_empty() {
-        Box::new(crate::fix::ProvidedPatchGenerator::new(Vec::new()))
+    let configured = config.evolve.generator.command.trim();
+    let command = if configured.is_empty() {
+        offered.map(|c| c.trim().to_owned()).filter(|c| !c.is_empty())
     } else {
-        Box::new(
+        Some(configured.to_owned())
+    };
+    match command {
+        None => Box::new(crate::fix::ProvidedPatchGenerator::new(Vec::new())),
+        Some(command) => Box::new(
             crate::fix::BridgeGenerator::new(
-                config.evolve.generator.command.clone(),
+                command,
                 std::time::Duration::from_secs(config.evolve.generator.timeout_secs),
             )
-            .with_preset(preset),
-        )
+            .with_preset(preset)
+            .about_app(start_command),
+        ),
     }
 }
 
-/// Run the full evolve pipeline as a daemon job, choosing the generator
-/// from the workspace policy (the configured bridge, or none).
+/// The bridge a caller offers for this job, if any.
+fn offered_generator(params: &serde_json::Value) -> Option<String> {
+    params.get("generator").and_then(|v| v.as_str()).map(String::from)
+}
+
+/// Run the full evolve pipeline as a daemon job, with the generator the
+/// policy pins or the one the caller offered.
+// One job, one long parameter list: the alternative is a struct that exists
+// only to be destructured at the single call site.
+#[allow(clippy::too_many_arguments)]
 async fn run_evolve_job(
     root: &Path,
     start: String,
@@ -83,6 +101,7 @@ async fn run_evolve_job(
     max_findings: usize,
     test: Option<String>,
     preset: Option<String>,
+    params: &serde_json::Value,
     sink: &dyn ProgressSink,
 ) -> Result<crate::evolve::EvolveReport> {
     let config = EvolveConfig::load(root)?;
@@ -92,7 +111,8 @@ async fn run_evolve_job(
             .ok()
             .and_then(|m| m.units.first().and_then(|u| u.commands.test.clone()))
     });
-    let generator = make_generator(&config, preset);
+    let generator =
+        make_generator(&config, preset, offered_generator(params), Some(start.clone()));
     let ctx = crate::evolve::EvolveContext {
         start_cmd: start,
         url,
@@ -120,7 +140,8 @@ async fn run_optimize_job(
         .get("preset")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let generator = make_generator(&config, preset);
+    let generator =
+        make_generator(&config, preset, offered_generator(params), Some(start.clone()));
     let test_cmd = test.or_else(|| {
         inspect_project(root)
             .ok()
@@ -198,11 +219,77 @@ pub async fn run_worker(
 }
 
 async fn execute(job: Job, scheduler: &Scheduler, events: &EventBus) {
+    // Called off while it waited its turn: nothing was started, nothing to
+    // undo.
+    if scheduler.is_cancelled(job.id) {
+        info!("job {} ({}) cancelled before it started", job.id, job.kind);
+        events.publish(Event::new(
+            "run.cancelled",
+            json!({ "job": job.id, "kind": job.kind, "phase": "queued" }),
+        ));
+        scheduler.forget_stop(job.id);
+        return;
+    }
+
     scheduler.set_state(job.id, JobState::Running, None);
     events.publish(Event::new("run.started", json!({ "job": job.id, "kind": job.kind })));
     let sink = BusSink { bus: events.clone(), job: job.id, kind: job.kind.clone() };
 
-    let outcome = match job.kind.as_str() {
+    // Dropping the campaign future is what stops it: supervised processes
+    // kill their group on drop and shadow guards destroy their worktree, so
+    // an operator's stop leaves no server running and no shadow behind.
+    let mut stop = scheduler.stop_signal(job.id);
+    let outcome = tokio::select! {
+        _ = wait_for_stop(&mut stop) => {
+            warn!("job {} ({}) cancelled while running", job.id, job.kind);
+            scheduler.set_state(job.id, JobState::Cancelled, Some("stopped on request".into()));
+            events.publish(Event::new(
+                "run.cancelled",
+                json!({ "job": job.id, "kind": job.kind, "phase": "running" }),
+            ));
+            scheduler.forget_stop(job.id);
+            return;
+        }
+        outcome = run_job(&job, &sink) => outcome,
+    };
+    scheduler.forget_stop(job.id);
+
+    match outcome {
+        Ok(result) => {
+            info!("job {} ({}) completed", job.id, job.kind);
+            scheduler.set_state(job.id, JobState::Completed, None);
+            events.publish(Event::new(
+                "run.completed",
+                json!({ "job": job.id, "kind": job.kind, "result": result }),
+            ));
+        }
+        Err(message) => {
+            warn!("job {} ({}) failed: {message}", job.id, job.kind);
+            scheduler.set_state(job.id, JobState::Failed, Some(message.clone()));
+            events.publish(Event::new(
+                "run.failed",
+                json!({ "job": job.id, "kind": job.kind, "error": message }),
+            ));
+        }
+    }
+}
+
+/// Resolve once the stop switch is flipped, and never if the sender is gone.
+async fn wait_for_stop(stop: &mut tokio::sync::watch::Receiver<bool>) {
+    if *stop.borrow() {
+        return;
+    }
+    while stop.changed().await.is_ok() {
+        if *stop.borrow() {
+            return;
+        }
+    }
+    std::future::pending::<()>().await
+}
+
+/// The work itself. Held as a future so a cancellation can drop it.
+async fn run_job(job: &Job, sink: &BusSink) -> Result<serde_json::Value, String> {
+    match job.kind.as_str() {
         "project.inspect" => {
             let root = job
                 .params
@@ -228,7 +315,7 @@ async fn execute(job: Job, scheduler: &Scheduler, events: &EventBus) {
             opts.build_cmd = job.params.get("build").and_then(|v| v.as_str()).map(String::from);
             // A baseline still means something without a running app, so a
             // target we cannot resolve degrades instead of failing.
-            if let Ok(target) = job_target(&root, &job.params, &sink).await {
+            if let Ok(target) = job_target(&root, &job.params, sink).await {
                 opts.start_cmd = Some(target.start_cmd);
                 opts.url = Some(target.url);
             }
@@ -254,7 +341,7 @@ async fn execute(job: Job, scheduler: &Scheduler, events: &EventBus) {
                 .and_then(|v| v.as_str())
                 .unwrap_or("standard")
                 .to_owned();
-            match job_target(&root, &job.params, &sink).await {
+            match job_target(&root, &job.params, sink).await {
                 Ok(target) => {
                     let plan = crate::proof::ProofPlan::for_profile(&profile, 512);
                     let run_id = format!("proof-{}", job.id);
@@ -266,7 +353,7 @@ async fn execute(job: Job, scheduler: &Scheduler, events: &EventBus) {
                         &plan,
                         std::time::Duration::from_secs(60),
                         None,
-                        &sink,
+                        sink,
                     )
                     .await
                     .and_then(|report| {
@@ -292,7 +379,7 @@ async fn execute(job: Job, scheduler: &Scheduler, events: &EventBus) {
                 .and_then(|v| v.as_str())
                 .unwrap_or("standard")
                 .to_owned();
-            match job_target(&root, &job.params, &sink).await {
+            match job_target(&root, &job.params, sink).await {
                 Ok(target) => {
                     let plan = crate::proof::ProofPlan::for_profile(&profile, 512);
                     let run_id = format!("diagnose-{}", job.id);
@@ -304,7 +391,7 @@ async fn execute(job: Job, scheduler: &Scheduler, events: &EventBus) {
                         &plan,
                         std::time::Duration::from_secs(60),
                         None,
-                        &sink,
+                        sink,
                     )
                     .await
                     .and_then(|report| {
@@ -340,7 +427,7 @@ async fn execute(job: Job, scheduler: &Scheduler, events: &EventBus) {
                 .map(|v| serde_json::from_value(v).map_err(|e| format!("invalid candidates: {e}")))
                 .unwrap_or_else(|| Ok(Vec::new()));
             let target = match finding.is_some() {
-                true => Some(job_target(&root, &job.params, &sink).await),
+                true => Some(job_target(&root, &job.params, sink).await),
                 false => None,
             };
             match (target, finding, candidates) {
@@ -365,7 +452,7 @@ async fn execute(job: Job, scheduler: &Scheduler, events: &EventBus) {
                         &finding,
                         &generator,
                         &crate::fix::GateConfig::default(),
-                        &sink,
+                        sink,
                     )
                     .await
                         .and_then(|report| {
@@ -399,7 +486,7 @@ async fn execute(job: Job, scheduler: &Scheduler, events: &EventBus) {
                 .unwrap_or(3) as usize;
             let test = job.params.get("test").and_then(|v| v.as_str()).map(String::from);
             let preset = job.params.get("preset").and_then(|v| v.as_str()).map(String::from);
-            match job_target(&root, &job.params, &sink).await {
+            match job_target(&root, &job.params, sink).await {
                 Ok(target) => run_evolve_job(
                     &root,
                     target.start_cmd,
@@ -408,7 +495,8 @@ async fn execute(job: Job, scheduler: &Scheduler, events: &EventBus) {
                     max_findings,
                     test,
                     preset,
-                    &sink,
+                    &job.params,
+                    sink,
                 )
                 .await
                 .map_err(|e| format!("{e:#}"))
@@ -430,7 +518,7 @@ async fn execute(job: Job, scheduler: &Scheduler, events: &EventBus) {
                 .unwrap_or("p95")
                 .to_owned();
             let test = job.params.get("test").and_then(|v| v.as_str()).map(String::from);
-            match job_target(&root, &job.params, &sink).await {
+            match job_target(&root, &job.params, sink).await {
                 Ok(target) => run_optimize_job(
                     &root,
                     target.start_cmd,
@@ -438,7 +526,7 @@ async fn execute(job: Job, scheduler: &Scheduler, events: &EventBus) {
                     objective,
                     test,
                     &job.params,
-                    &sink,
+                    sink,
                 )
                 .await
                 .map_err(|e| format!("{e:#}"))
@@ -490,25 +578,6 @@ async fn execute(job: Job, scheduler: &Scheduler, events: &EventBus) {
             }
         }
         other => Err(format!("unknown job kind: {other}")),
-    };
-
-    match outcome {
-        Ok(result) => {
-            info!("job {} ({}) completed", job.id, job.kind);
-            scheduler.set_state(job.id, JobState::Completed, None);
-            events.publish(Event::new(
-                "run.completed",
-                json!({ "job": job.id, "kind": job.kind, "result": result }),
-            ));
-        }
-        Err(message) => {
-            warn!("job {} ({}) failed: {message}", job.id, job.kind);
-            scheduler.set_state(job.id, JobState::Failed, Some(message.clone()));
-            events.publish(Event::new(
-                "run.failed",
-                json!({ "job": job.id, "kind": job.kind, "error": message }),
-            ));
-        }
     }
 }
 
@@ -530,5 +599,44 @@ mod tests {
         assert_eq!(event.payload["stage"], "proof");
         assert_eq!(event.payload["event"], "started");
         assert_eq!(event.payload["data"]["profile"], "quick");
+    }
+
+    #[test]
+    fn a_caller_can_offer_the_bridge_a_project_never_configured() {
+        let config = EvolveConfig::default();
+        let params = json!({ "generator": "navin python -m navin.evolve.bridge" });
+        let generator = make_generator(&config, None, offered_generator(&params), None);
+        assert_eq!(generator.name(), "bridge");
+    }
+
+    #[test]
+    fn what_the_project_pins_wins_over_what_the_caller_offers() {
+        use crate::diagnose::{Confidence, Finding, Severity};
+
+        let mut config = EvolveConfig::default();
+        // The pinned bridge answers politely; the offered one would blow up.
+        config.evolve.generator.command = "cat >/dev/null; echo '[]'".to_owned();
+        let params = json!({ "generator": "exit 7" });
+        let generator = make_generator(&config, None, offered_generator(&params), None);
+        let finding = Finding {
+            id: "crash.load".to_owned(),
+            title: "t".to_owned(),
+            severity: Severity::Critical,
+            confidence: Confidence::High,
+            related_fault: None,
+            symptom: "s".to_owned(),
+            root_cause: "c".to_owned(),
+            remediation: "r".to_owned(),
+            family: "reliability".to_owned(),
+            evidence: vec![],
+        };
+        let proposed = generator.propose(&finding, Path::new("/tmp")).expect("pinned bridge ran");
+        assert!(proposed.is_empty());
+    }
+
+    #[test]
+    fn with_nothing_offered_and_nothing_configured_no_model_is_called() {
+        let generator = make_generator(&EvolveConfig::default(), None, None, None);
+        assert_eq!(generator.name(), "provided");
     }
 }

@@ -91,7 +91,7 @@ impl Diagnosis {
     ) -> Self {
         // Worst severity first; stable so the order within a severity is
         // the order rules produced them.
-        findings.sort_by(|a, b| a.severity.cmp(&b.severity));
+        findings.sort_by_key(|finding| finding.severity);
         let summary = summarize(&findings, robustness_score);
         Diagnosis {
             schema: DIAGNOSIS_SCHEMA.to_owned(),

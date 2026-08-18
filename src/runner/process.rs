@@ -66,7 +66,7 @@ impl SupervisedProcess {
                 unsafe { libc::kill(-pgid, libc::SIGKILL) };
                 let _ = self.child.wait().await;
             }
-            return Ok(());
+            Ok(())
         }
         #[cfg(not(unix))]
         {
@@ -84,6 +84,19 @@ impl SupervisedProcess {
                 self.kill_tree().await.ok();
                 anyhow::bail!("process exceeded its deadline of {}s", deadline.as_secs())
             }
+        }
+    }
+}
+
+/// A dropped supervisor must not leave a server behind: `kill_on_drop` only
+/// reaches the shell we spawned, so the whole group goes down here. This is
+/// what makes cancelling a campaign safe - the future is dropped, and the
+/// app under test dies with it.
+#[cfg(unix)]
+impl Drop for SupervisedProcess {
+    fn drop(&mut self) {
+        if let Ok(None) = self.child.try_wait() {
+            unsafe { libc::kill(-(self.pid as i32), libc::SIGKILL) };
         }
     }
 }
@@ -121,6 +134,35 @@ mod tests {
             let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
             assert!(!alive, "process {pid} still alive after kill_tree");
         }
+    }
+
+    /// Cancelling a campaign drops the supervisor without awaiting it; the
+    /// grandchildren (npm -> node -> workers) must go down all the same.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_the_supervisor_kills_the_whole_group() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("out.log");
+        let pid_file = tmp.path().join("child.pid");
+        let command = format!("sleep 300 & echo $! > {} ; wait", pid_file.display());
+        let proc = SupervisedProcess::spawn(&command, tmp.path(), &log, None).unwrap();
+
+        let mut grandchild = 0;
+        for _ in 0..50 {
+            if let Ok(text) = std::fs::read_to_string(&pid_file) {
+                if let Ok(pid) = text.trim().parse::<i32>() {
+                    grandchild = pid;
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(grandchild > 0, "the child never reported its pid");
+
+        drop(proc);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let alive = unsafe { libc::kill(grandchild, 0) } == 0;
+        assert!(!alive, "grandchild {grandchild} survived the drop");
     }
 
     #[tokio::test]
