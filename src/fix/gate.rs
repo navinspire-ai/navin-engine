@@ -64,6 +64,18 @@ pub fn evaluate(cmp: &Comparison, cfg: &GateConfig) -> GateResult {
         _ => {}
     }
 
+    // Business invariants follow the same pre-existing-condition rule.
+    match (cmp.invariants_before, cmp.invariants_after) {
+        (_, Some(true)) => fores.push("business invariants hold".to_owned()),
+        (Some(false), Some(false)) => {
+            fores.push("business invariants were already failing before the patch".to_owned())
+        }
+        (_, Some(false)) => {
+            against.push("business invariants fail after the patch".to_owned())
+        }
+        _ => {}
+    }
+
     if let (Some(before), Some(after)) = (cmp.p95_before_ms, cmp.p95_after_ms) {
         let ceiling = before * (1.0 + cfg.latency_regression_tolerance);
         if before > 0.0 && after > ceiling {
@@ -104,6 +116,8 @@ mod tests {
             p95_after_ms: Some(11.0),
             tests_before: None,
             tests_after: None,
+            invariants_before: None,
+            invariants_after: None,
         }
     }
 
@@ -160,6 +174,24 @@ mod tests {
         let mut cmp = base();
         cmp.tests_before = Some(false);
         cmp.tests_after = Some(false);
+        assert_eq!(evaluate(&cmp, &GateConfig::default()).decision, Decision::Accept);
+    }
+
+    #[test]
+    fn breaking_a_business_invariant_is_rejected() {
+        let mut cmp = base();
+        cmp.invariants_before = Some(true);
+        cmp.invariants_after = Some(false);
+        let gate = evaluate(&cmp, &GateConfig::default());
+        assert_eq!(gate.decision, Decision::Reject);
+        assert!(gate.reasons.iter().any(|r| r.contains("invariants fail")));
+    }
+
+    #[test]
+    fn invariants_already_red_are_not_held_against_the_candidate() {
+        let mut cmp = base();
+        cmp.invariants_before = Some(false);
+        cmp.invariants_after = Some(false);
         assert_eq!(evaluate(&cmp, &GateConfig::default()).decision, Decision::Accept);
     }
 

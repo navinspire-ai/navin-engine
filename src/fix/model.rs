@@ -62,6 +62,11 @@ pub struct Comparison {
     pub tests_before: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tests_after: Option<bool>,
+    /// Business invariants from evolve.toml, when any are declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invariants_before: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invariants_after: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

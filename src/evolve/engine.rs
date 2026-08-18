@@ -99,6 +99,7 @@ pub async fn run_evolve(
         ready_timeout: ctx.ready_timeout,
         limits: ctx.limits,
         test_cmd: ctx.test_cmd.clone(),
+        invariants: config.invariants.clone(),
     };
     let gate_cfg = GateConfig::default();
 

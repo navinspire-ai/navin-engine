@@ -20,6 +20,7 @@ use crate::ENGINE_VERSION;
 
 use super::resource_guard::ResourceGuard;
 use super::scheduler::Scheduler;
+use super::watcher::run_watcher;
 use super::worker::run_worker;
 
 struct DaemonHandler {
@@ -27,6 +28,8 @@ struct DaemonHandler {
     scheduler: Scheduler,
     guard: ResourceGuard,
     started: Instant,
+    /// Lets `engine.shutdown` stop the daemon remotely (dashboard button).
+    shutdown: watch::Sender<bool>,
 }
 
 impl Handler for DaemonHandler {
@@ -49,6 +52,11 @@ impl Handler for DaemonHandler {
                 inspect_project(&root)
                     .map(|manifest| serde_json::to_value(manifest).unwrap_or_default())
                     .map_err(|e| (RpcErrorCode::Internal, format!("{e:#}")))
+            }
+            "engine.shutdown" => {
+                info!("shutdown requested over IPC");
+                let _ = self.shutdown.send(true);
+                Ok(json!({ "stopping": true }))
             }
             "job.enqueue" => {
                 let kind = params
@@ -93,12 +101,18 @@ pub async fn run_daemon(root: &Path) -> Result<()> {
         events.clone(),
         shutdown_rx.clone(),
     ));
+    let watcher = tokio::spawn(run_watcher(
+        root.clone(),
+        scheduler.clone(),
+        shutdown_rx.clone(),
+    ));
 
     let handler: Arc<dyn Handler> = Arc::new(DaemonHandler {
         root: root.clone(),
         scheduler,
         guard,
         started: Instant::now(),
+        shutdown: shutdown_tx.clone(),
     });
 
     info!(
@@ -121,5 +135,6 @@ pub async fn run_daemon(root: &Path) -> Result<()> {
     }
     let _ = shutdown_tx.send(true);
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), worker).await;
+    watcher.abort();
     Ok(())
 }

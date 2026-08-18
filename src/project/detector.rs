@@ -9,7 +9,10 @@ use serde_json::Value;
 use std::fs;
 use std::path::Path;
 
-use super::commands::{default_commands, node_commands, node_package_manager};
+use super::commands::{
+    default_commands, java_commands, node_commands, node_package_manager, php_commands,
+    python_commands, ruby_commands,
+};
 use super::manifest::{ProjectManifest, ProjectUnit, MANIFEST_SCHEMA};
 use super::runtime::Runtime;
 use super::topology::discover_services;
@@ -46,16 +49,19 @@ pub fn inspect_project(root: &Path) -> Result<ProjectManifest> {
         .map(|name| (*name).to_owned())
         .collect();
 
-    Ok(ProjectManifest {
+    let mut manifest = ProjectManifest {
         schema: MANIFEST_SCHEMA.to_owned(),
         monorepo: units.len() > 1,
         services: discover_services(&root),
         env_files,
         dockerfile: root.join("Dockerfile").is_file(),
         git: root.join(".git").exists(),
+        start_command: None,
         root,
         units,
-    })
+    };
+    manifest.start_command = super::resolve::start_command(&manifest.root.clone(), &manifest);
+    Ok(manifest)
 }
 
 const ENV_FILES: &[&str] = &[".env", ".env.local", ".env.example", ".env.production"];
@@ -103,7 +109,7 @@ fn detect_unit(root: &Path, dir: &Path) -> Option<ProjectUnit> {
             runtime: Runtime::Node,
             framework: node_framework(&pkg),
             package_manager: Some(pm.to_owned()),
-            commands: node_commands(&pkg, pm),
+            commands: node_commands(dir, &pkg, pm),
         });
     }
     if dir.join("Cargo.toml").is_file() {
@@ -131,7 +137,7 @@ fn detect_unit(root: &Path, dir: &Path) -> Option<ProjectUnit> {
             runtime: Runtime::Python,
             framework: python_framework(dir),
             package_manager: Some(pm.to_owned()),
-            commands: default_commands(Runtime::Python),
+            commands: python_commands(dir),
         });
     }
     if dir.join("go.mod").is_file() {
@@ -148,12 +154,63 @@ fn detect_unit(root: &Path, dir: &Path) -> Option<ProjectUnit> {
         return Some(ProjectUnit {
             path: rel,
             runtime: Runtime::Java,
-            framework: None,
+            framework: java_framework(dir),
             package_manager: Some(pm.to_owned()),
-            commands: default_commands(Runtime::Java),
+            commands: java_commands(dir),
+        });
+    }
+    if dir.join("composer.json").is_file() {
+        return Some(ProjectUnit {
+            path: rel,
+            runtime: Runtime::Php,
+            framework: php_framework(dir),
+            package_manager: Some("composer".to_owned()),
+            commands: php_commands(dir),
+        });
+    }
+    if dir.join("Gemfile").is_file() {
+        let rails = dir.join("bin").join("rails").is_file();
+        return Some(ProjectUnit {
+            path: rel,
+            runtime: Runtime::Ruby,
+            framework: rails.then(|| "rails".to_owned()),
+            package_manager: Some("bundler".to_owned()),
+            commands: ruby_commands(dir),
+        });
+    }
+    if has_extension(dir, "csproj") || has_extension(dir, "sln") {
+        return Some(ProjectUnit {
+            path: rel,
+            runtime: Runtime::Dotnet,
+            framework: None,
+            package_manager: Some("nuget".to_owned()),
+            commands: default_commands(Runtime::Dotnet),
         });
     }
     None
+}
+
+fn has_extension(dir: &Path, extension: &str) -> bool {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.path().extension().is_some_and(|ext| ext == extension))
+        })
+        .unwrap_or(false)
+}
+
+fn java_framework(dir: &Path) -> Option<String> {
+    let mut text = fs::read_to_string(dir.join("pom.xml")).unwrap_or_default();
+    text.push_str(&fs::read_to_string(dir.join("build.gradle")).unwrap_or_default());
+    text.contains("spring-boot").then(|| "spring".to_owned())
+}
+
+fn php_framework(dir: &Path) -> Option<String> {
+    if dir.join("artisan").is_file() {
+        return Some("laravel".to_owned());
+    }
+    dir.join("bin").join("console").is_file().then(|| "symfony".to_owned())
 }
 
 fn node_framework(pkg: &Value) -> Option<String> {
@@ -184,7 +241,9 @@ fn node_framework(pkg: &Value) -> Option<String> {
 }
 
 fn python_framework(dir: &Path) -> Option<String> {
-    let text = fs::read_to_string(dir.join("pyproject.toml")).ok()?;
+    let mut text = fs::read_to_string(dir.join("pyproject.toml")).unwrap_or_default();
+    text.push_str(&fs::read_to_string(dir.join("requirements.txt")).unwrap_or_default());
+    let text = text.to_lowercase();
     for (needle, label) in [
         ("fastapi", "fastapi"),
         ("django", "django"),
@@ -240,6 +299,62 @@ mod tests {
         let paths: Vec<&str> = manifest.units.iter().map(|u| u.path.as_str()).collect();
         assert!(paths.contains(&"web"));
         assert!(paths.iter().any(|p| p.ends_with("api")));
+    }
+
+    #[test]
+    fn flask_package_yields_a_start_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("requirements.txt"), "Flask>=3\npytest\n").unwrap();
+        let pkg = tmp.path().join("shop");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(pkg.join("__init__.py"), "def create_app():\n    return Flask(__name__)\n")
+            .unwrap();
+
+        let unit = &inspect_project(tmp.path()).unwrap().units[0];
+        assert_eq!(unit.runtime, Runtime::Python);
+        assert_eq!(unit.framework.as_deref(), Some("flask"));
+        assert_eq!(unit.commands.start.as_deref(), Some("flask --app shop run --port 5000"));
+        assert_eq!(unit.commands.test.as_deref(), Some("pytest"));
+    }
+
+    #[test]
+    fn django_and_fastapi_entry_points_are_recognised() {
+        let django = tempfile::tempdir().unwrap();
+        fs::write(django.path().join("requirements.txt"), "Django==5.0\n").unwrap();
+        fs::write(django.path().join("manage.py"), "# django entry point\n").unwrap();
+        let unit = &inspect_project(django.path()).unwrap().units[0];
+        assert_eq!(unit.commands.start.as_deref(), Some("python manage.py runserver 8000"));
+
+        let fastapi = tempfile::tempdir().unwrap();
+        fs::write(fastapi.path().join("requirements.txt"), "fastapi\nuvicorn\n").unwrap();
+        fs::create_dir_all(fastapi.path().join("app")).unwrap();
+        fs::write(fastapi.path().join("app").join("main.py"), "app = FastAPI()\n").unwrap();
+        let unit = &inspect_project(fastapi.path()).unwrap().units[0];
+        assert_eq!(unit.commands.start.as_deref(), Some("uvicorn app.main:app --port 8000"));
+    }
+
+    #[test]
+    fn a_virtualenv_in_the_project_is_used_by_the_commands() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("requirements.txt"), "Flask\n").unwrap();
+        fs::write(tmp.path().join("app.py"), "app = Flask(__name__)\n").unwrap();
+        let bin = tmp.path().join(".venv").join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("flask"), "#!/bin/sh\n").unwrap();
+
+        let unit = &inspect_project(tmp.path()).unwrap().units[0];
+        let start = unit.commands.start.clone().unwrap();
+        assert!(start.starts_with(&bin.join("flask").display().to_string()), "{start}");
+        assert!(start.ends_with("--app app run --port 5000"), "{start}");
+    }
+
+    #[test]
+    fn a_python_project_without_entry_point_keeps_an_empty_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("pyproject.toml"), "[project]\nname = \"lib\"\n").unwrap();
+
+        let unit = &inspect_project(tmp.path()).unwrap().units[0];
+        assert_eq!(unit.commands.start, None);
     }
 
     #[test]

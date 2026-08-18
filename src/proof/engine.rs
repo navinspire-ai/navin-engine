@@ -12,7 +12,8 @@ use crate::runner::ports::parse_http_url;
 use crate::shadow::sandbox::SandboxLimits;
 use crate::shadow::worktree;
 
-use super::faults::{flood, kill, load, malformed, FaultKind};
+use super::faults::netchaos::ChaosConfig;
+use super::faults::{flood, kill, load, malformed, netchaos, FaultKind};
 use super::model::ProofReport;
 use super::service::ServiceManager;
 
@@ -28,6 +29,10 @@ pub struct ProofPlan {
     pub flood_connections: usize,
     pub flood_hold: Duration,
     pub rss_limit_mb: u64,
+    /// Extra latency the chaos proxy adds to every connection.
+    pub chaos_delay: Duration,
+    /// Every Nth proxied connection is reset (0 disables resets).
+    pub chaos_reset_every: u64,
 }
 
 impl ProofPlan {
@@ -45,6 +50,7 @@ impl ProofPlan {
                     FaultKind::Load,
                     FaultKind::Malformed,
                     FaultKind::ConnectionFlood,
+                    FaultKind::NetworkChaos,
                     FaultKind::KillRecovery,
                 ],
                 30,
@@ -57,6 +63,7 @@ impl ProofPlan {
                     FaultKind::Load,
                     FaultKind::Malformed,
                     FaultKind::ConnectionFlood,
+                    FaultKind::NetworkChaos,
                     FaultKind::KillRecovery,
                 ],
                 12,
@@ -74,6 +81,8 @@ impl ProofPlan {
             flood_connections,
             flood_hold: Duration::from_secs(3),
             rss_limit_mb,
+            chaos_delay: Duration::from_millis(40),
+            chaos_reset_every: 5,
         }
     }
 }
@@ -143,6 +152,21 @@ pub async fn run_proof(
             FaultKind::Malformed => malformed::run(&svc).await,
             FaultKind::ConnectionFlood => {
                 flood::run(&svc, plan.flood_connections, plan.flood_hold).await
+            }
+            FaultKind::NetworkChaos => {
+                let config = ChaosConfig {
+                    delay: plan.chaos_delay,
+                    reset_every: plan.chaos_reset_every,
+                };
+                netchaos::run(
+                    &svc,
+                    config,
+                    // Half the load window: chaos is about degradation, not endurance.
+                    plan.load_duration.div_f64(2.0).max(Duration::from_secs(3)),
+                    plan.load_concurrency,
+                    plan.max_error_ratio,
+                )
+                .await
             }
             FaultKind::KillRecovery => kill::run(&mut svc, plan.recovery_bound).await,
         };
@@ -218,6 +242,8 @@ mod tests {
             flood_connections: 4,
             flood_hold: Duration::from_secs(1),
             rss_limit_mb: 512,
+            chaos_delay: Duration::from_millis(10),
+            chaos_reset_every: 5,
         };
         let sink = RecordingSink::new();
         let report = run_proof(dir.path(), &target, &plan, &sink).await.unwrap();

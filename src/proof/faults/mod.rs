@@ -5,6 +5,7 @@ pub mod flood;
 pub mod kill;
 pub mod load;
 pub mod malformed;
+pub mod netchaos;
 
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +21,9 @@ pub enum FaultKind {
     Malformed,
     /// Many half-open connections held at once; must not crash the server.
     ConnectionFlood,
+    /// Degraded wire (added latency + connection resets) via a chaos proxy;
+    /// the service must keep serving and be clean again afterwards.
+    NetworkChaos,
 }
 
 impl FaultKind {
@@ -29,6 +33,7 @@ impl FaultKind {
             FaultKind::KillRecovery => "kill_recovery",
             FaultKind::Malformed => "malformed",
             FaultKind::ConnectionFlood => "connection_flood",
+            FaultKind::NetworkChaos => "network_chaos",
         }
     }
 }

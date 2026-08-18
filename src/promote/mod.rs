@@ -11,6 +11,6 @@ pub mod identity;
 pub mod model;
 pub mod policy;
 
-pub use engine::{list, promote, rollback};
+pub use engine::{list, merge, promote, rollback};
 pub use model::{Certificate, PromotionOutcome, PromotionRecord};
 pub use policy::{decide, PolicyDecision};

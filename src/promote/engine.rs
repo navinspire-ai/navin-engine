@@ -129,6 +129,50 @@ pub fn promote(
     Ok(record)
 }
 
+/// One-click merge of a branch-only promotion, on explicit operator demand.
+/// The gate never reopens: the certificate must still be authentic (valid,
+/// checksum intact, Ed25519 signature verified), the promotion untouched,
+/// and the working tree clean. Fast-forward only, like every merge here.
+pub fn merge(project_root: &Path, id: &str) -> Result<PromotionRecord> {
+    let mut record = PromotionRecord::load(project_root, id)?;
+    if record.rolled_back_at.is_some() {
+        bail!("promotion {id} was rolled back; nothing to merge");
+    }
+    if record.merged {
+        bail!("promotion {id} is already merged");
+    }
+    if record.outcome != PromotionOutcome::BranchOnly {
+        bail!("promotion {id} has no merge-ready branch (outcome {:?})", record.outcome);
+    }
+    let branch = record.branch.clone().context("promotion record has no branch")?;
+
+    let certificate = record.certificate.as_ref().context("promotion has no certificate")?;
+    if !certificate.is_authentic() {
+        bail!(
+            "certificate of {id} failed authenticity (valid: {}, checksum: {}, signature: {})",
+            certificate.is_valid(),
+            certificate.checksum_matches(),
+            certificate.signature_valid()
+        );
+    }
+
+    if !git::is_repo(project_root) {
+        bail!("workspace is not a git repository");
+    }
+    if !git::is_clean(project_root).unwrap_or(false) {
+        bail!("working tree has uncommitted changes; commit or stash them first");
+    }
+
+    git::merge_ff_only(project_root, &branch)
+        .with_context(|| format!("fast-forward merging {branch}"))?;
+    record.merged = true;
+    record.outcome = PromotionOutcome::Merged;
+    record.reasons.push("merged on explicit operator demand (one-click merge)".to_owned());
+    record.save(project_root)?;
+    info!("promotion {id}: one-click merged {branch}");
+    Ok(record)
+}
+
 /// Undo a promotion. Merged changes are reverted with an inverse commit;
 /// branch-only promotions have their branch deleted.
 pub fn rollback(project_root: &Path, id: &str) -> Result<PromotionRecord> {

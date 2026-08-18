@@ -24,6 +24,7 @@ use navin_engine::fix::{
     ProvidedPatchGenerator,
 };
 use navin_engine::ipc::server::call;
+use navin_engine::optimize::{run_optimize, Objective, OptimizeContext};
 use navin_engine::progress::NoopSink;
 use navin_engine::proof::ProofReport;
 use navin_engine::promote::{self, git as promote_git};
@@ -31,6 +32,7 @@ use navin_engine::policy::config::EvolveConfig;
 use navin_engine::project::inspect_project;
 use navin_engine::proof::{run_proof_in_shadow, ProofPlan};
 use navin_engine::shadow::ShadowManager;
+use navin_engine::target;
 
 #[derive(Parser)]
 #[command(name = "navin-engine", version, about = "Navin Evolve engine")]
@@ -97,9 +99,9 @@ enum Command {
         /// Start command (defaults to the one discovered by inspect).
         #[arg(long)]
         start: Option<String>,
-        /// Local URL to probe, e.g. http://127.0.0.1:3000/
+        /// Local URL to probe (default: found by booting the app once).
         #[arg(long)]
-        url: String,
+        url: Option<String>,
         /// quick | standard | deep
         #[arg(long, default_value = "standard")]
         profile: String,
@@ -135,9 +137,9 @@ enum Command {
         /// Start command (defaults to the one discovered by inspect).
         #[arg(long)]
         start: Option<String>,
-        /// Local URL to probe, e.g. http://127.0.0.1:3000/
+        /// Local URL to probe (default: found by booting the app once).
         #[arg(long)]
-        url: String,
+        url: Option<String>,
         /// quick | standard | deep
         #[arg(long, default_value = "quick")]
         profile: String,
@@ -159,6 +161,15 @@ enum Command {
         /// Candidate proposal JSON (defaults to the accepted proposal).
         #[arg(long)]
         candidate: Option<PathBuf>,
+    },
+    /// One-click merge of a branch-only promotion. Refuses anything whose
+    /// signed certificate is no longer authentic. Fast-forward only.
+    Merge {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Promotion record id (see `promotions`).
+        #[arg(long)]
+        id: String,
     },
     /// Roll back a promotion by id (revert merge, or delete the branch).
     Rollback {
@@ -188,9 +199,9 @@ enum Command {
         /// Start command (defaults to the one discovered by inspect).
         #[arg(long)]
         start: Option<String>,
-        /// Local URL to probe, e.g. http://127.0.0.1:3000/
+        /// Local URL to probe (default: found by booting the app once).
         #[arg(long)]
-        url: String,
+        url: Option<String>,
         /// quick | standard | deep
         #[arg(long, default_value = "quick")]
         profile: String,
@@ -203,6 +214,61 @@ enum Command {
         /// Test command (defaults to the one discovered by inspect).
         #[arg(long)]
         test: Option<String>,
+        /// Model preset forwarded to the LLM bridge (NAVIN_BRIDGE_PRESET).
+        #[arg(long)]
+        preset: Option<String>,
+    },
+    /// ASSE: benchmark N generated variants of healthy code under identical
+    /// load and promote only the measured winner (tests + proof verified).
+    Optimize {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Start command (defaults to the one discovered by inspect).
+        #[arg(long)]
+        start: Option<String>,
+        /// Local URL to benchmark (default: found by booting the app once).
+        #[arg(long)]
+        url: Option<String>,
+        /// p95 | throughput
+        #[arg(long, default_value = "p95")]
+        objective: String,
+        /// Benchmark duration per window, in seconds.
+        #[arg(long, default_value_t = 10)]
+        duration: u64,
+        /// Repeated benchmark windows per measurement: a gain must clear the
+        /// combined noise of both distributions to win.
+        #[arg(long, default_value_t = 3)]
+        repeats: usize,
+        #[arg(long, default_value_t = 16)]
+        concurrency: usize,
+        /// Max number of variants to benchmark.
+        #[arg(long, default_value_t = 4)]
+        max_variants: usize,
+        /// Minimum improvement (percent) required to promote a winner.
+        #[arg(long, default_value_t = 5.0)]
+        min_gain: f64,
+        /// Test command (defaults to the one discovered by inspect).
+        #[arg(long)]
+        test: Option<String>,
+        /// Optional variants JSON (used when no generator is configured).
+        #[arg(long)]
+        candidates: Option<PathBuf>,
+        /// Request vectors replayed by the differential verifier against
+        /// baseline and every variant (0 disables the behaviour check).
+        #[arg(long, default_value_t = 24)]
+        diff_vectors: usize,
+        /// Model preset forwarded to the LLM bridge (NAVIN_BRIDGE_PRESET).
+        #[arg(long)]
+        preset: Option<String>,
+    },
+    /// Measure the honest capacity of the built-in load generator against
+    /// an in-process hello server (no target app involved).
+    BenchLoadgen {
+        /// Benchmark duration in seconds.
+        #[arg(long, default_value_t = 5)]
+        duration: u64,
+        #[arg(long, default_value_t = 256)]
+        concurrency: usize,
     },
 }
 
@@ -313,19 +379,15 @@ fn main() -> Result<()> {
         },
         Command::Proof { path, start, url, profile } => {
             let root = path.canonicalize()?;
-            let manifest = inspect_project(&root)?;
-            let start_cmd = start
-                .or_else(|| manifest.units.first().and_then(|u| u.commands.start.clone()))
-                .ok_or_else(|| {
-                    anyhow::anyhow!("no start command: pass --start \"...\"")
-                })?;
+            let runtime = runtime()?;
+            let target = runtime.block_on(target::resolve(&root, start, url, &NoopSink))?;
             let plan = ProofPlan::for_profile(&profile, 512);
             let run_id = format!("proof-cli-{}", std::process::id());
-            let report = runtime()?.block_on(run_proof_in_shadow(
+            let report = runtime.block_on(run_proof_in_shadow(
                 &root,
                 &run_id,
-                &start_cmd,
-                &url,
+                &target.start_cmd,
+                &target.url,
                 &plan,
                 Duration::from_secs(60),
                 None,
@@ -344,20 +406,15 @@ fn main() -> Result<()> {
                 diagnose_project(&root, &parsed)
             } else {
                 // Run a fresh proof, then diagnose it.
-                let url = url.ok_or_else(|| {
-                    anyhow::anyhow!("provide --url to run a proof, or --report to diagnose an existing one")
-                })?;
-                let manifest = inspect_project(&root)?;
-                let start_cmd = start
-                    .or_else(|| manifest.units.first().and_then(|u| u.commands.start.clone()))
-                    .ok_or_else(|| anyhow::anyhow!("no start command: pass --start \"...\""))?;
+                let runtime = runtime()?;
+                let target = runtime.block_on(target::resolve(&root, start, url, &NoopSink))?;
                 let plan = ProofPlan::for_profile(&profile, 512);
                 let run_id = format!("diagnose-cli-{}", std::process::id());
-                let proof = runtime()?.block_on(run_proof_in_shadow(
+                let proof = runtime.block_on(run_proof_in_shadow(
                     &root,
                     &run_id,
-                    &start_cmd,
-                    &url,
+                    &target.start_cmd,
+                    &target.url,
                     &plan,
                     Duration::from_secs(60),
                     None,
@@ -373,24 +430,24 @@ fn main() -> Result<()> {
         Command::Fix { path, finding, candidates, start, url, profile, test } => {
             let root = path.canonicalize()?;
             let manifest = inspect_project(&root)?;
-            let start_cmd = start
-                .or_else(|| manifest.units.first().and_then(|u| u.commands.start.clone()))
-                .ok_or_else(|| anyhow::anyhow!("no start command: pass --start \"...\""))?;
+            let runtime = runtime()?;
+            let target = runtime.block_on(target::resolve(&root, start, url, &NoopSink))?;
             let test_cmd =
                 test.or_else(|| manifest.units.first().and_then(|u| u.commands.test.clone()));
             let candidates: Vec<FixCandidate> =
                 serde_json::from_str(&std::fs::read_to_string(&candidates)?)
                     .context("candidates file must be a JSON array of fix candidates")?;
             let ctx = FixContext {
-                start_cmd,
-                url,
+                start_cmd: target.start_cmd,
+                url: target.url,
                 plan: ProofPlan::for_profile(&profile, 512),
                 ready_timeout: Duration::from_secs(60),
                 limits: None,
                 test_cmd,
+                invariants: EvolveConfig::load(&root)?.invariants,
             };
             let generator = ProvidedPatchGenerator::new(candidates);
-            let report = runtime()?.block_on(run_fix(
+            let report = runtime.block_on(run_fix(
                 &root,
                 &ctx,
                 &finding,
@@ -447,6 +504,12 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&record)?);
             Ok(())
         }
+        Command::Merge { path, id } => {
+            let root = path.canonicalize()?;
+            let record = promote::merge(&root, &id)?;
+            println!("{}", serde_json::to_string_pretty(&record)?);
+            Ok(())
+        }
         Command::Rollback { path, id } => {
             let root = path.canonicalize()?;
             let record = promote::rollback(&root, &id)?;
@@ -478,23 +541,25 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
         }
-        Command::Evolve { path, start, url, profile, max_findings, candidates, test } => {
+        Command::Evolve { path, start, url, profile, max_findings, candidates, test, preset } => {
             let root = path.canonicalize()?;
             let config = EvolveConfig::load(&root)?;
             let manifest = inspect_project(&root)?;
-            let start_cmd = start
-                .or_else(|| manifest.units.first().and_then(|u| u.commands.start.clone()))
-                .ok_or_else(|| anyhow::anyhow!("no start command: pass --start \"...\""))?;
+            let runtime = runtime()?;
+            let target = runtime.block_on(target::resolve(&root, start, url, &NoopSink))?;
             let test_cmd =
                 test.or_else(|| manifest.units.first().and_then(|u| u.commands.test.clone()));
 
             // Pick the generator: the configured bridge wins; otherwise fall
             // back to provided candidates (handy for tests / offline runs).
             let generator: Box<dyn FixGenerator> = if !config.evolve.generator.command.is_empty() {
-                Box::new(BridgeGenerator::new(
-                    config.evolve.generator.command.clone(),
-                    Duration::from_secs(config.evolve.generator.timeout_secs),
-                ))
+                Box::new(
+                    BridgeGenerator::new(
+                        config.evolve.generator.command.clone(),
+                        Duration::from_secs(config.evolve.generator.timeout_secs),
+                    )
+                    .with_preset(preset),
+                )
             } else {
                 let list: Vec<FixCandidate> = match candidates {
                     Some(p) => serde_json::from_str(&std::fs::read_to_string(&p)?)
@@ -505,8 +570,8 @@ fn main() -> Result<()> {
             };
 
             let ctx = EvolveContext {
-                start_cmd,
-                url,
+                start_cmd: target.start_cmd,
+                url: target.url,
                 profile,
                 ready_timeout: Duration::from_secs(60),
                 limits: None,
@@ -514,11 +579,123 @@ fn main() -> Result<()> {
                 test_cmd,
             };
             let report =
-                runtime()?.block_on(run_evolve(&root, &ctx, generator.as_ref(), &config, &NoopSink))?;
+                runtime.block_on(run_evolve(&root, &ctx, generator.as_ref(), &config, &NoopSink))?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
+        Command::Optimize {
+            path,
+            start,
+            url,
+            objective,
+            duration,
+            repeats,
+            concurrency,
+            max_variants,
+            min_gain,
+            test,
+            candidates,
+            diff_vectors,
+            preset,
+        } => {
+            let root = path.canonicalize()?;
+            let config = EvolveConfig::load(&root)?;
+            let manifest = inspect_project(&root)?;
+            let runtime = runtime()?;
+            let target = runtime.block_on(target::resolve(&root, start, url, &NoopSink))?;
+            let test_cmd =
+                test.or_else(|| manifest.units.first().and_then(|u| u.commands.test.clone()));
+
+            // An explicit candidates file wins over the configured bridge:
+            // the caller asked for exactly these variants.
+            let generator: Box<dyn FixGenerator> = if let Some(p) = candidates {
+                let list: Vec<FixCandidate> =
+                    serde_json::from_str(&std::fs::read_to_string(&p)?)
+                        .context("candidates file must be a JSON array")?;
+                Box::new(ProvidedPatchGenerator::new(list))
+            } else if !config.evolve.generator.command.is_empty() {
+                Box::new(
+                    BridgeGenerator::new(
+                        config.evolve.generator.command.clone(),
+                        Duration::from_secs(config.evolve.generator.timeout_secs),
+                    )
+                    .with_preset(preset),
+                )
+            } else {
+                Box::new(ProvidedPatchGenerator::new(Vec::new()))
+            };
+
+            let ctx = OptimizeContext {
+                start_cmd: target.start_cmd,
+                url: target.url,
+                ready_timeout: Duration::from_secs(60),
+                limits: None,
+                test_cmd,
+                bench_duration: Duration::from_secs(duration),
+                bench_concurrency: concurrency,
+                bench_repeats: repeats,
+                max_variants,
+                min_gain_percent: min_gain,
+                objective: Objective::parse(&objective)?,
+                diff_vectors,
+            };
+            let report =
+                runtime.block_on(run_optimize(&root, &ctx, generator.as_ref(), &config, &NoopSink))?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
+        Command::BenchLoadgen { duration, concurrency } => {
+            let report = runtime()?.block_on(bench_loadgen(
+                Duration::from_secs(duration),
+                concurrency,
+            ))?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
         }
     }
+}
+
+/// Honest generator capacity: hammer an in-process hello server and report
+/// what this machine actually sustains. No target app, no network beyond
+/// loopback: the number is the generator's own ceiling here.
+async fn bench_loadgen(duration: Duration, concurrency: usize) -> Result<serde_json::Value> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else { break };
+            tokio::spawn(async move {
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                    .await;
+            });
+        }
+    });
+
+    let stats = navin_engine::baseline::latency::probe(
+        "127.0.0.1",
+        port,
+        "/",
+        duration,
+        concurrency,
+    )
+    .await;
+    Ok(json!({
+        "schema": "navin-loadgen-bench/v1",
+        "duration_s": duration.as_secs(),
+        "concurrency": concurrency,
+        "achieved_rps": stats.rps,
+        "requests": stats.requests,
+        "failures": stats.failures,
+        "p50_ms": stats.p50_ms,
+        "p95_ms": stats.p95_ms,
+        "p99_ms": stats.p99_ms,
+        "note": "capacity against an in-process hello server on loopback; a real target app is always the limiting factor",
+    }))
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime> {

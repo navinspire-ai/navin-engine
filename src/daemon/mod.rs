@@ -4,6 +4,7 @@
 pub mod lifecycle;
 pub mod resource_guard;
 pub mod scheduler;
+pub mod watcher;
 pub mod worker;
 
 pub use lifecycle::run_daemon;

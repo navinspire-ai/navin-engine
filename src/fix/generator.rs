@@ -67,11 +67,19 @@ impl FixGenerator for ProvidedPatchGenerator {
 pub struct BridgeGenerator {
     command: String,
     timeout: Duration,
+    /// Model preset forwarded to the bridge as `NAVIN_BRIDGE_PRESET`, so an
+    /// operator can pick the LLM per campaign without editing evolve.toml.
+    preset: Option<String>,
 }
 
 impl BridgeGenerator {
     pub fn new(command: impl Into<String>, timeout: Duration) -> Self {
-        BridgeGenerator { command: command.into(), timeout }
+        BridgeGenerator { command: command.into(), timeout, preset: None }
+    }
+
+    pub fn with_preset(mut self, preset: Option<String>) -> Self {
+        self.preset = preset.filter(|p| !p.trim().is_empty());
+        self
     }
 }
 
@@ -88,7 +96,7 @@ impl FixGenerator for BridgeGenerator {
             finding,
         };
         let payload = serde_json::to_vec(&request)?;
-        let stdout = run_bridge(&self.command, &payload, self.timeout)
+        let stdout = run_bridge(&self.command, &payload, self.timeout, self.preset.as_deref())
             .with_context(|| format!("fix bridge `{}` failed", self.command))?;
 
         let candidates: Vec<FixCandidate> = serde_json::from_slice(&stdout)
@@ -104,8 +112,17 @@ impl FixGenerator for BridgeGenerator {
 
 /// Run the bridge with a wall-clock timeout, feeding `input` on stdin and
 /// returning stdout bytes. Kills the child if it overruns.
-fn run_bridge(command: &str, input: &[u8], timeout: Duration) -> Result<Vec<u8>> {
-    let mut child = shell(command)
+fn run_bridge(
+    command: &str,
+    input: &[u8],
+    timeout: Duration,
+    preset: Option<&str>,
+) -> Result<Vec<u8>> {
+    let mut shell_cmd = shell(command);
+    if let Some(preset) = preset {
+        shell_cmd.env("NAVIN_BRIDGE_PRESET", preset);
+    }
+    let mut child = shell_cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

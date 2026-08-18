@@ -76,6 +76,10 @@ pub struct ProjectManifest {
     pub dockerfile: bool,
     /// True when the root is a git repository (worktree isolation needs it).
     pub git: bool,
+    /// Command the engine would use to start the application, resolved
+    /// across every unit and entry point it knows about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_command: Option<String>,
 }
 
 pub const MANIFEST_SCHEMA: &str = "navin-manifest/v1";

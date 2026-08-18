@@ -4,8 +4,10 @@
 pub mod commands;
 pub mod detector;
 pub mod manifest;
+pub mod resolve;
 pub mod runtime;
 pub mod topology;
 
 pub use detector::inspect_project;
 pub use manifest::ProjectManifest;
+pub use resolve::{start_command, suggested_ports};

@@ -12,6 +12,7 @@ pub mod diagnose;
 pub mod evolve;
 pub mod fix;
 pub mod ipc;
+pub mod optimize;
 pub mod policy;
 pub mod progress;
 pub mod project;
@@ -20,6 +21,8 @@ pub mod proof;
 pub mod runner;
 pub mod shadow;
 pub mod storage;
+pub mod target;
+pub mod verify;
 
 /// Version reported by `engine.status` and embedded in every artefact.
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");

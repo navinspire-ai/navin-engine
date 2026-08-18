@@ -10,7 +10,9 @@ use std::time::Duration;
 use tracing::info;
 
 use crate::diagnose::{diagnose, Diagnosis, Severity};
+use crate::policy::config::InvariantSpec;
 use crate::progress::{NoopSink, ProgressSink};
+use crate::verify::invariants::run_invariants;
 use crate::proof::model::ProofReport;
 use crate::proof::{run_proof, ProofPlan, ProofTarget};
 use crate::shadow::cleanup::CleanupGuard;
@@ -36,6 +38,9 @@ pub struct FixContext {
     /// the suite runs in every shadow and the gate rejects candidates that
     /// turn a green suite red.
     pub test_cmd: Option<String>,
+    /// Business invariants from evolve.toml; the gate rejects candidates
+    /// that break a previously green invariant.
+    pub invariants: Vec<InvariantSpec>,
 }
 
 /// Upper bound for one test-suite run inside a shadow.
@@ -45,6 +50,8 @@ struct Evidence {
     report: ProofReport,
     diagnosis: Diagnosis,
     tests_passed: Option<bool>,
+    /// None when no invariant is declared.
+    invariants_ok: Option<bool>,
 }
 
 /// Run a fix campaign for `target_finding` using candidates from `generator`.
@@ -73,6 +80,7 @@ pub async fn run_fix(
             "score": before.report.robustness_score,
             "verdict": before.report.verdict,
             "tests": before.tests_passed,
+            "invariants": before.invariants_ok,
         }),
     );
     let target = before
@@ -126,6 +134,7 @@ pub async fn run_fix(
             before.report.verdict,
             p95_before,
             before.tests_passed,
+            before.invariants_ok,
             gate_cfg,
         )
         .await;
@@ -181,6 +190,7 @@ async fn evaluate_candidate(
     verdict_before: crate::proof::Verdict,
     p95_before: Option<f64>,
     tests_before: Option<bool>,
+    invariants_before: Option<bool>,
     gate_cfg: &GateConfig,
 ) -> FixAttempt {
     match prove_and_diagnose(project_root, run_id, ctx, Some(&candidate.patch)).await {
@@ -207,6 +217,8 @@ async fn evaluate_candidate(
                 p95_after_ms: load_p95(&after.report),
                 tests_before,
                 tests_after: after.tests_passed,
+                invariants_before,
+                invariants_after: after.invariants_ok,
             };
             let gate = evaluate(&comparison, gate_cfg);
             FixAttempt {
@@ -234,6 +246,8 @@ async fn evaluate_candidate(
                 p95_after_ms: None,
                 tests_before,
                 tests_after: None,
+                invariants_before,
+                invariants_after: None,
             },
             gate: super::model::GateResult {
                 decision: super::model::Decision::Reject,
@@ -268,6 +282,12 @@ async fn prove_and_diagnose(
         None => None,
     };
 
+    let invariants_ok = if ctx.invariants.is_empty() {
+        None
+    } else {
+        Some(run_invariants(&ctx.invariants, guard.path(), project_root).await.passed)
+    };
+
     let target = ProofTarget {
         start_cmd: ctx.start_cmd.clone(),
         url: ctx.url.clone(),
@@ -284,7 +304,7 @@ async fn prove_and_diagnose(
 
     let report = report?;
     let diagnosis = diagnose(&report, &log_text);
-    Ok(Evidence { report, diagnosis, tests_passed })
+    Ok(Evidence { report, diagnosis, tests_passed, invariants_ok })
 }
 
 /// Run the test command inside a shadow. Any non-zero exit, spawn failure

@@ -17,6 +17,27 @@ pub const CONFIG_FILE: &str = "evolve.toml";
 pub struct EvolveConfig {
     pub proof: ProofSection,
     pub evolve: EvolveSection,
+    /// Business invariants: commands that must exit 0 for a candidate to be
+    /// promotable. They run inside the shadow, after the test suite.
+    ///
+    /// ```toml
+    /// [[invariants]]
+    /// name = "no_duplicate_payments"
+    /// command = "python verify_payments.py"
+    /// ```
+    pub invariants: Vec<InvariantSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvariantSpec {
+    pub name: String,
+    pub command: String,
+    #[serde(default = "default_invariant_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_invariant_timeout() -> u64 {
+    120
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,6 +221,25 @@ mod tests {
         // Untouched sections keep their safe defaults.
         assert_eq!(config.evolve.mode, "safe");
         assert_eq!(config.evolve.resources.max_cpu_percent, 15);
+    }
+
+    #[test]
+    fn invariants_are_parsed_with_a_default_timeout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let navin = tmp.path().join(NAVIN_DIR);
+        std::fs::create_dir_all(&navin).unwrap();
+        std::fs::write(
+            navin.join(CONFIG_FILE),
+            "[[invariants]]\nname = \"orders\"\ncommand = \"python check.py\"\n\n\
+             [[invariants]]\nname = \"payments\"\ncommand = \"sh pay.sh\"\ntimeout_secs = 30\n",
+        )
+        .unwrap();
+
+        let config = EvolveConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.invariants.len(), 2);
+        assert_eq!(config.invariants[0].name, "orders");
+        assert_eq!(config.invariants[0].timeout_secs, 120);
+        assert_eq!(config.invariants[1].timeout_secs, 30);
     }
 
     #[test]
