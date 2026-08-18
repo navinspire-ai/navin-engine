@@ -4,6 +4,9 @@
 
 ### Added
 
+- Every `fix`, `optimize` and promotion write a markdown sibling next to
+  the JSON (same stem, `.md`). MCP replies point at it as `report_md`, so
+  an agent opens a page instead of parsing the artefact.
 - Every candidate now carries the unified `diff` of what it changed, rejected
   ones included, captured with git inside the shadow before it is destroyed.
   A measurement can be reviewed instead of believed.

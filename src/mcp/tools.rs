@@ -42,7 +42,9 @@ candidates. The engine proves the before/after and gates on evidence.
 in isolation and only a statistically significant win survives.
 
 When a candidate wins, apply it to the workspace yourself: the engine \
-reports evidence, it does not edit your files. The start command, test \
+reports evidence, it does not edit your files. Every run also writes a \
+markdown sibling (`report_md`) next to the JSON; open that file to read \
+the numbers, the gate, and the winner's diff. The start command, test \
 command and URL are auto-detected; pass them only to override.";
 
 /// Tool names this server answers, in the order they are advertised.
@@ -398,6 +400,7 @@ async fn evolve(root: &Path, args: &Value, sink: &dyn ProgressSink) -> Result<Va
 fn open_pull_request(root: &Path, args: &Value) -> Result<Value> {
     let id = string_arg(args, "id").context("`id` is required: pick one from `promotions`")?;
     let record = promote::publish(root, &id)?;
+    let json_path = crate::promote::model::promotions_dir(root).join(format!("{}.json", record.id));
     Ok(json!({
         "promotion": record.id,
         "branch": record.branch,
@@ -405,6 +408,7 @@ fn open_pull_request(root: &Path, args: &Value) -> Result<Value> {
         "pull_request": record.pull_request,
         "merged": record.merged,
         "note": record.reasons.last(),
+        "report_md": crate::report::sidecar_display(&json_path),
     }))
 }
 
@@ -559,6 +563,7 @@ fn fix_summary(report: &FixReport, artefact: PathBuf) -> Value {
         "proposal_file": report.proposal_path,
         "notes": report.notes,
         "report_file": artefact.display().to_string(),
+        "report_md": crate::report::sidecar_display(&artefact),
     })
 }
 
@@ -587,6 +592,7 @@ fn optimize_summary(report: &OptimizeReport, root: &Path) -> Value {
             })
         })
         .collect();
+    let json_file = artefact_path(root, "optimize", &report.commit);
     json!({
         "objective": report.objective,
         "baseline": {
@@ -602,7 +608,8 @@ fn optimize_summary(report: &OptimizeReport, root: &Path) -> Value {
         "promotion": report.promotion_id,
         "promotion_outcome": report.promotion_outcome,
         "notes": report.notes,
-        "report_file": artefact_path(root, "optimize", &report.commit),
+        "report_file": json_file.clone(),
+        "report_md": crate::report::sidecar_display(Path::new(&json_file)),
     })
 }
 

@@ -136,6 +136,7 @@ impl PromotionRecord {
         let path = dir.join(format!("{}.json", self.id));
         std::fs::write(&path, serde_json::to_string_pretty(self)?)
             .with_context(|| format!("cannot write {}", path.display()))?;
+        crate::report::write_sidecar(&path, &crate::report::promotion(self))?;
         Ok(path)
     }
 

@@ -171,6 +171,7 @@ impl OptimizeReport {
         let path = dir.join(format!("{}.json", self.commit));
         std::fs::write(&path, serde_json::to_string_pretty(self)?)
             .with_context(|| format!("cannot write {}", path.display()))?;
+        crate::report::write_sidecar(&path, &crate::report::optimize(self))?;
         Ok(path)
     }
 }

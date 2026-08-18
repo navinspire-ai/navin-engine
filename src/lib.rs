@@ -19,6 +19,7 @@ pub mod progress;
 pub mod project;
 pub mod promote;
 pub mod proof;
+pub mod report;
 pub mod runner;
 pub mod shadow;
 pub mod storage;

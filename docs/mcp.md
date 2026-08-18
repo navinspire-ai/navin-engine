@@ -86,12 +86,15 @@ What comes back, from the run recorded in the README:
   "winner": "cache-the-payload", "winner_gain_percent": 85.7,
   "promotion_id": "promo-optimize-p95-1787059566",
   "promotion_outcome": "BranchOnly",
-  "report_path": ".navin/optimize/<commit>.json" }
+  "report_file": ".navin/optimize/<commit>.json",
+  "report_md": ".navin/optimize/<commit>.md" }
 ```
 
 The winner's `diff` travels with the summary; every candidate's diff, rejected
-ones included, is in the artefact at `report_path`. A rejected variant is
-exactly the one worth reading.
+ones included, is in the artefact at `report_file`. Open `report_md` for the
+same measurement as a page: baseline, table of candidates, winner diff, and
+the commands to open the pull request. A rejected variant is exactly the one
+worth reading.
 
 ## Calling `fix`
 

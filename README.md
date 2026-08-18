@@ -243,14 +243,16 @@ never touches your branches.
 .navin/
   proofs/<commit>.json        robustness reports
   diagnoses/<commit>.json     findings
-  fixes/<commit>.json         candidate attempts, diffs and gate decisions
-  optimize/<commit>.json      benchmark runs
-  promotions/<id>.json        accepted changes and certificates
+  fixes/<commit>.json|.md     candidate attempts, diffs and gate decisions
+  optimize/<commit>.json|.md  benchmark runs
+  promotions/<id>.json|.md    accepted changes and certificates
   evolve/                     shadow worktrees, daemon socket, state
 ```
 
-All of it is JSON with a `schema` field. Add `.navin/` to your `.gitignore`,
-or commit the reports if you want proof history in the repository.
+JSON is the source of truth (`schema` field on every file). The `.md`
+sibling is the same measurement in a page an agent or a person can open
+in the IDE. Add `.navin/` to your `.gitignore`, or commit the reports if
+you want proof history in the repository.
 
 ## Requirements
 
