@@ -52,6 +52,8 @@ struct Evidence {
     tests_passed: Option<bool>,
     /// None when no invariant is declared.
     invariants_ok: Option<bool>,
+    /// Unified diff of the candidate as applied, None for the baseline.
+    code_diff: Option<String>,
 }
 
 /// Run a fix campaign for `target_finding` using candidates from `generator`.
@@ -229,6 +231,7 @@ async fn evaluate_candidate(
                 gate,
                 after_findings,
                 apply_error: None,
+                diff: after.code_diff,
             }
         }
         Err(err) => FixAttempt {
@@ -255,6 +258,7 @@ async fn evaluate_candidate(
             },
             after_findings: vec![],
             apply_error: Some(format!("{err:#}")),
+            diff: None,
         },
     }
 }
@@ -270,10 +274,15 @@ async fn prove_and_diagnose(
     let manager = ShadowManager::new(project_root);
     let guard = CleanupGuard::new(manager.create(run_id)?);
 
-    if let Some(patch) = patch {
-        patch::apply(patch, guard.path())
-            .context("applying candidate patch to the shadow")?;
-    }
+    let code_diff = match patch {
+        Some(patch) => {
+            patch::apply(patch, guard.path())
+                .context("applying candidate patch to the shadow")?;
+            // Read it now: the shadow does not outlive this call.
+            super::diff::capture(guard.path())
+        }
+        None => None,
+    };
 
     // Run the project's own tests first: cheaper than a proof, and a broken
     // suite is decisive on its own.
@@ -304,7 +313,7 @@ async fn prove_and_diagnose(
 
     let report = report?;
     let diagnosis = diagnose(&report, &log_text);
-    Ok(Evidence { report, diagnosis, tests_passed, invariants_ok })
+    Ok(Evidence { report, diagnosis, tests_passed, invariants_ok, code_diff })
 }
 
 /// Run the test command inside a shadow. Any non-zero exit, spawn failure

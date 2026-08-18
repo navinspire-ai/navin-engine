@@ -27,6 +27,39 @@ pub fn is_repo(root: &Path) -> bool {
     root.join(".git").exists()
 }
 
+/// Fetch URL of a remote, None when the remote is not configured.
+pub fn remote_url(root: &Path, remote: &str) -> Option<String> {
+    git(root, &["remote", "get-url", remote]).ok().filter(|url| !url.is_empty())
+}
+
+/// The first configured remote, preferring `origin`.
+pub fn default_remote(root: &Path) -> Option<String> {
+    let remotes = git(root, &["remote"]).ok()?;
+    let mut names = remotes.lines().map(str::trim).filter(|name| !name.is_empty());
+    if names.clone().any(|name| name == "origin") {
+        return Some("origin".to_owned());
+    }
+    names.next().map(str::to_owned)
+}
+
+/// The branch a pull request should target: what the remote calls its
+/// default branch, falling back to the branch checked out here.
+pub fn base_branch(root: &Path, remote: &str) -> Result<String> {
+    let head = format!("refs/remotes/{remote}/HEAD");
+    if let Ok(reference) = git(root, &["symbolic-ref", "--short", &head]) {
+        if let Some((_, branch)) = reference.split_once('/') {
+            return Ok(branch.to_owned());
+        }
+    }
+    current_branch(root)
+}
+
+/// Publish a branch on a remote and set its upstream.
+pub fn push_branch(root: &Path, remote: &str, branch: &str) -> Result<()> {
+    git(root, &["push", "--set-upstream", remote, branch])?;
+    Ok(())
+}
+
 pub fn head_sha(root: &Path) -> Result<String> {
     git(root, &["rev-parse", "HEAD"])
 }

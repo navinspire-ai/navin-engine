@@ -10,7 +10,9 @@ pub mod git;
 pub mod identity;
 pub mod model;
 pub mod policy;
+pub mod publish;
 
 pub use engine::{list, merge, promote, rollback};
+pub use publish::publish;
 pub use model::{Certificate, PromotionOutcome, PromotionRecord};
 pub use policy::{decide, PolicyDecision};

@@ -46,7 +46,7 @@ reports evidence, it does not edit your files. The start command, test \
 command and URL are auto-detected; pass them only to override.";
 
 /// Tool names this server answers, in the order they are advertised.
-const NAMES: [&str; 8] = [
+const NAMES: [&str; 9] = [
     "inspect_project",
     "prove",
     "diagnose",
@@ -54,6 +54,7 @@ const NAMES: [&str; 8] = [
     "optimize",
     "evolve",
     "promotions",
+    "open_pull_request",
     "verify_certificate",
 ];
 
@@ -223,6 +224,20 @@ pub fn catalog() -> Vec<Value> {
             "inputSchema": object_schema(json!({ "path": path_property() }), &[]),
         }),
         json!({
+            "name": "open_pull_request",
+            "description": "Push a promotion's branch to the git remote and open a pull \
+                            request for it, using the GitHub CLI when it is installed. \
+                            Without it, the branch is still pushed and a compare link is \
+                            returned. The pull request body carries the measured evidence.",
+            "inputSchema": object_schema(
+                json!({
+                    "path": path_property(),
+                    "id": { "type": "string", "description": "Promotion id from `promotions`." },
+                }),
+                &["id"],
+            ),
+        }),
+        json!({
             "name": "verify_certificate",
             "description": "Re-verify a promotion's certificate: gate validity, artefact \
                             checksum and Ed25519 signature. Use it to check that a change \
@@ -253,6 +268,7 @@ pub async fn call(
         "optimize" => optimize(&root, args, sink).await?,
         "evolve" => evolve(&root, args, sink).await?,
         "promotions" => json!({ "promotions": promote::list(&root) }),
+        "open_pull_request" => open_pull_request(&root, args)?,
         "verify_certificate" => verify_certificate(&root, args)?,
         other => anyhow::bail!("unknown tool `{other}`"),
     };
@@ -377,6 +393,19 @@ async fn evolve(root: &Path, args: &Value, sink: &dyn ProgressSink) -> Result<Va
         };
     let report = run_evolve(root, &ctx, generator.as_ref(), &config, sink).await?;
     Ok(evolve_summary(&report, root))
+}
+
+fn open_pull_request(root: &Path, args: &Value) -> Result<Value> {
+    let id = string_arg(args, "id").context("`id` is required: pick one from `promotions`")?;
+    let record = promote::publish(root, &id)?;
+    Ok(json!({
+        "promotion": record.id,
+        "branch": record.branch,
+        "pushed_to": record.pushed_to,
+        "pull_request": record.pull_request,
+        "merged": record.merged,
+        "note": record.reasons.last(),
+    }))
 }
 
 fn verify_certificate(root: &Path, args: &Value) -> Result<Value> {
@@ -512,6 +541,12 @@ fn fix_summary(report: &FixReport, artefact: PathBuf) -> Value {
                     "after": attempt.comparison.tests_after,
                 },
                 "apply_error": attempt.apply_error,
+                // The accepted candidate is the one whose code matters here.
+                "diff": if report.accepted.as_deref() == Some(attempt.candidate_id.as_str()) {
+                    attempt.diff.clone()
+                } else {
+                    None
+                },
             })
         })
         .collect();
@@ -542,6 +577,13 @@ fn optimize_summary(report: &OptimizeReport, root: &Path) -> Value {
                 "p95_ms": variant.stats.as_ref().map(|stats| stats.p95_ms),
                 "rps": variant.stats.as_ref().map(|stats| stats.rps),
                 "note": variant.note,
+                // Only the winner's code travels: the host asked for a
+                // measurement, not for N copies of its own patches.
+                "diff": if report.winner.as_deref() == Some(variant.candidate_id.as_str()) {
+                    variant.diff.clone()
+                } else {
+                    None
+                },
             })
         })
         .collect();

@@ -103,6 +103,9 @@ pub struct FixAttempt {
     /// Set when applying the patch itself failed (candidate dead on arrival).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub apply_error: Option<String>,
+    /// Unified diff of what the candidate changed, captured in the shadow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
 }
 
 /// The result of a fix campaign against one finding.

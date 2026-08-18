@@ -112,6 +112,15 @@ pub struct PromotionRecord {
     pub merged: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub certificate: Option<Certificate>,
+    /// Unified diff of the promoted commit, so accepting is never blind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    /// Remote branch, once the promotion has been pushed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pushed_to: Option<String>,
+    /// Pull request opened for the branch, or the compare link to open one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<String>,
     pub created_at: String,
     /// Set once the change has been rolled back.
     #[serde(skip_serializing_if = "Option::is_none")]

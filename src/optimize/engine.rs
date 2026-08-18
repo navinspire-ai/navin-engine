@@ -322,6 +322,8 @@ struct Measurement {
     invariants_ok: Option<bool>,
     invariant_failures: Vec<String>,
     fingerprints: Option<Vec<Fingerprint>>,
+    /// Unified diff of the patch as applied, None for the baseline.
+    code_diff: Option<String>,
 }
 
 /// Shadow, optional patch, tests, invariants, behavioural fingerprints and
@@ -339,10 +341,15 @@ async fn measure_patched(
     let manager = ShadowManager::new(project_root);
     let guard = CleanupGuard::new(manager.create(run_id)?);
 
-    if let Some(patch) = patch {
-        crate::fix::patch::apply(patch, guard.path())
-            .context("applying the variant to the shadow")?;
-    }
+    let code_diff = match patch {
+        Some(patch) => {
+            crate::fix::patch::apply(patch, guard.path())
+                .context("applying the variant to the shadow")?;
+            // Read it now: the shadow is destroyed at the end of this call.
+            crate::fix::diff::capture(guard.path())
+        }
+        None => None,
+    };
 
     let tests_passed = match &ctx.test_cmd {
         Some(cmd) => Some(run_test_suite(cmd, guard.path(), project_root).await),
@@ -395,7 +402,14 @@ async fn measure_patched(
     }
     svc.shutdown().await;
     guard.destroy()?;
-    Ok(Measurement { runs, tests_passed, invariants_ok, invariant_failures, fingerprints })
+    Ok(Measurement {
+        runs,
+        tests_passed,
+        invariants_ok,
+        invariant_failures,
+        fingerprints,
+        code_diff,
+    })
 }
 
 /// Inputs for one variant measurement (bundled: the list got too long).
@@ -444,6 +458,7 @@ async fn measure_variant(args: MeasureVariantArgs<'_>) -> VariantOutcome {
         behavior_equivalent: None,
         eligible: false,
         note: String::new(),
+        diff: None,
     };
 
     let diff_mode = if baseline_prints.is_some() {
@@ -472,6 +487,9 @@ async fn measure_variant(args: MeasureVariantArgs<'_>) -> VariantOutcome {
     let cand_rps = stats::sample(&stats::rps_series(&measured.runs));
     outcome.tests_passed = measured.tests_passed;
     outcome.invariants_ok = measured.invariants_ok;
+    // Set before the eligibility checks: a rejected variant is exactly the
+    // one a human wants to read.
+    outcome.diff = measured.code_diff;
     outcome.p95_std_ms = Some(round1(cand_p95.std_dev));
     outcome.rps_std = Some(round1(cand_rps.std_dev));
     outcome.gain_percent = Some(round1(gain_percent(ctx.objective, baseline, &stats)));
@@ -656,6 +674,7 @@ fn synthesized_fix_report(
             gate,
             after_findings: vec![],
             apply_error: None,
+            diff: measured.diff.clone(),
         }],
         accepted: Some(winner.id.clone()),
         proposal_path: None,

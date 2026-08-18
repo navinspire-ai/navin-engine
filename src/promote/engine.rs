@@ -43,6 +43,9 @@ pub fn promote(
         prev_head: None,
         merged: false,
         certificate: Some(certificate.clone()),
+        diff: None,
+        pushed_to: None,
+        pull_request: None,
         created_at: format!("epoch:{epoch}"),
         rolled_back_at: None,
     };
@@ -77,12 +80,17 @@ pub fn promote(
     }
     git::add_worktree(project_root, &worktree, &branch)?;
 
+    // The diff is read from the worktree, which is about to disappear: a
+    // promotion nobody can read is a promotion nobody should accept.
+    let mut diff = None;
     let commit_sha = (|| -> Result<String> {
         crate::fix::patch::apply(&candidate.patch, &worktree)
             .context("applying the proposal to the promotion worktree")?;
+        diff = crate::fix::diff::capture(&worktree);
         let message = commit_message(report, candidate, &certificate);
         git::commit_all(&worktree, &message)
     })();
+    record.diff = diff;
 
     git::remove_worktree(project_root, &worktree).ok();
 

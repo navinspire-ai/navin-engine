@@ -178,6 +178,15 @@ enum Command {
         #[arg(long)]
         id: String,
     },
+    /// Push a promotion branch and open a pull request for it. Uses the
+    /// GitHub CLI when available, otherwise returns a compare link.
+    Pr {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Promotion record id (see `promotions`).
+        #[arg(long)]
+        id: String,
+    },
     /// Roll back a promotion by id (revert merge, or delete the branch).
     Rollback {
         #[arg(default_value = ".")]
@@ -517,6 +526,12 @@ fn main() -> Result<()> {
         Command::Merge { path, id } => {
             let root = path.canonicalize()?;
             let record = promote::merge(&root, &id)?;
+            println!("{}", serde_json::to_string_pretty(&record)?);
+            Ok(())
+        }
+        Command::Pr { path, id } => {
+            let root = path.canonicalize()?;
+            let record = promote::publish(&root, &id)?;
             println!("{}", serde_json::to_string_pretty(&record)?);
             Ok(())
         }

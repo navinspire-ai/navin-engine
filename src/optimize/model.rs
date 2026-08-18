@@ -95,6 +95,10 @@ pub struct VariantOutcome {
     /// behaviour preserved, no error regression).
     pub eligible: bool,
     pub note: String,
+    /// Unified diff of what this variant actually changed, so a rejected
+    /// candidate can still be read instead of being taken on faith.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
 }
 
 /// Pick the eligible variant with the best gain, if it clears `min_gain`
@@ -193,6 +197,7 @@ mod tests {
             behavior_equivalent: None,
             eligible,
             note: String::new(),
+            diff: None,
         }
     }
 

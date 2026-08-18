@@ -126,6 +126,7 @@ and what comes back:
 | `optimize` | Benchmark performance variants against the unmodified code. |
 | `evolve` | Autopilot, for projects that configure their own candidate generator. |
 | `promotions` | Changes the engine accepted, each with a signed certificate. |
+| `open_pull_request` | Push a promotion's branch and open a PR carrying its evidence. |
 | `verify_certificate` | Re-check a promotion's gate, checksum and signature. |
 
 ## Use it from the shell
@@ -139,7 +140,15 @@ navin-engine diagnose                # findings
 navin-engine fix --finding crash.load --candidates patches.json
 navin-engine optimize --objective p95 --candidates variants.json
 navin-engine promotions
+navin-engine pr --id promo-crash-load-1730000000       # push + open the PR
+navin-engine merge --id promo-crash-load-1730000000    # fast-forward locally
+navin-engine rollback --id promo-crash-load-1730000000 # inverse commit
 ```
+
+Every report carries the `diff` of what each candidate changed, rejected ones
+included, so nothing has to be accepted on trust. `pr` pushes the promotion
+branch and opens the pull request with the GitHub CLI when it is installed;
+otherwise it still pushes and hands back a compare link.
 
 `--start`, `--url` and `--test` exist for the rare case where detection picks
 the wrong program in a monorepo. You should not need them.

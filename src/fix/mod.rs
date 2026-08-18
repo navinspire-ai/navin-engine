@@ -5,6 +5,7 @@
 //! candidate becomes a proposal under `.navin/fixes/`; the workspace is
 //! never modified here (that is a separate, explicit promotion step).
 
+pub mod diff;
 pub mod engine;
 pub mod gate;
 pub mod generator;

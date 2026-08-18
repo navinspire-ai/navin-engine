@@ -4,11 +4,25 @@
 
 ### Added
 
+- Every candidate now carries the unified `diff` of what it changed, rejected
+  ones included, captured with git inside the shadow before it is destroyed.
+  A measurement can be reviewed instead of believed.
+- `navin-engine pr --id <promotion>`: push the promotion branch and open a
+  pull request whose body is the measured evidence. Uses the GitHub CLI when
+  it is installed and authenticated; otherwise the branch is still pushed and
+  a compare link is returned, so no token is ever stored.
 - `navin-engine mcp`: the engine as an MCP server on stdio, so any AI coding
-  environment can drive it. Eight tools (`inspect_project`, `prove`,
+  environment can drive it. Nine tools (`inspect_project`, `prove`,
   `diagnose`, `fix`, `optimize`, `evolve`, `promotions`,
-  `verify_certificate`), progress notifications for long runs, and candidate
-  patches passed inline so the host's own model is the generator.
+  `open_pull_request`, `verify_certificate`), progress notifications for long
+  runs, and candidate patches passed inline so the host's own model is the
+  generator.
+
+### Fixed
+
+- A campaign that was cancelled or crashed left its shadow behind, and every
+  later campaign failed with `shadow opt-base already exists` until the daemon
+  restarted. Leftovers are now reclaimed and rebuilt from clean code.
 - An npm launcher (`npx -y navin-engine mcp`), so an MCP config is one line
   and no Rust toolchain is needed. It downloads the release binary for the
   platform once, verifies its SHA-256, and caches it.
