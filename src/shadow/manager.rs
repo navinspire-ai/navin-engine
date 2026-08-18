@@ -48,7 +48,15 @@ impl ShadowManager {
             "run id must be alphanumeric/dashes"
         );
         let dest = self.shadow_dir().join(run_id);
-        anyhow::ensure!(!dest.exists(), "shadow {run_id} already exists");
+        // Stages name their shadows after the step, not the run, so a campaign
+        // that was cancelled or crashed leaves one behind and would block every
+        // later campaign. Anything under `.navin/shadow/` belongs to the engine,
+        // never to the user, so reclaim it instead.
+        if dest.exists() {
+            warn!("shadow {run_id} left over from an earlier run, reclaiming it");
+            destroy_path(&self.project_root, &dest)
+                .with_context(|| format!("cannot reclaim stale shadow {run_id}"))?;
+        }
         std::fs::create_dir_all(self.shadow_dir())
             .with_context(|| format!("cannot create {}", self.shadow_dir().display()))?;
 
@@ -167,6 +175,24 @@ mod tests {
         assert_eq!(shadow.mode, ShadowMode::Copy);
         assert!(shadow.path.join("main.py").is_file());
         shadow.destroy().unwrap();
+    }
+
+    #[test]
+    fn a_leftover_shadow_is_reclaimed_not_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        let manager = ShadowManager::new(tmp.path());
+
+        // A cancelled campaign leaves its shadow behind, with a file in it.
+        let first = manager.create("opt-base").unwrap();
+        std::fs::write(first.path.join("leftover.txt"), "from the killed run").unwrap();
+
+        // The next campaign must run anyway, and must start from clean code.
+        let second = manager.create("opt-base").unwrap();
+        assert!(second.path.join("app.txt").is_file());
+        assert!(!second.path.join("leftover.txt").exists());
+        assert_eq!(manager.list(), vec!["opt-base".to_owned()]);
+        second.destroy().unwrap();
     }
 
     #[test]
