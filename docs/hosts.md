@@ -8,6 +8,11 @@ same command:
 navin-engine mcp
 ```
 
+Every snippet below assumes the binary is on your `PATH`. If it is not, either
+use its absolute path, or let npm fetch it by replacing `"command":
+"navin-engine"` and `"args": ["mcp"]` with `"command": "npx"` and `"args":
+["-y", "navin-engine", "mcp"]`.
+
 Two things are worth setting everywhere: a **generous tool timeout**, because
 a proof or a benchmark takes minutes, and the **project root**, which defaults
 to the directory the host launched the server in. Pass a path explicitly

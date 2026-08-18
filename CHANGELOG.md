@@ -9,6 +9,9 @@
   `diagnose`, `fix`, `optimize`, `evolve`, `promotions`,
   `verify_certificate`), progress notifications for long runs, and candidate
   patches passed inline so the host's own model is the generator.
+- An npm launcher (`npx -y navin-engine mcp`), so an MCP config is one line
+  and no Rust toolchain is needed. It downloads the release binary for the
+  platform once, verifies its SHA-256, and caches it.
 - `README.md`, `docs/hosts.md` and a MIT `LICENSE` for standalone use.
 
 ## 0.1.0

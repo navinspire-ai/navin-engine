@@ -24,6 +24,26 @@ jobs:
       - run: cargo test --locked -- --test-threads=4
         timeout-minutes: 20
 
+  launcher:
+    name: npm launcher
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The launcher derives the release tag from its own version, so a drift
+      # against the crate would make `npx navin-engine` fetch a missing asset.
+      - name: Version matches the crate
+        run: |
+          crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          launcher=$(node -p "require('./npm/package.json').version")
+          test "$crate" = "$launcher" || {
+            echo "Cargo.toml is $crate but npm/package.json is $launcher"
+            exit 1
+          }
+      - run: node --check npm/bin/navin-engine.js
+
   build:
     name: build (${{ matrix.os }})
     strategy:

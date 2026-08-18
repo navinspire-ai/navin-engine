@@ -29,17 +29,25 @@ $ navin-engine proof
 
 ## Install
 
-```bash
-# From source (needs a Rust toolchain)
-git clone https://github.com/navinspire-ai/navin-engine
-cd navin-engine && cargo build --release
-# the binary is at target/release/navin-engine
-```
-
 Prebuilt binaries for Linux, macOS and Windows are attached to each
 [release](https://github.com/navinspire-ai/navin-engine/releases). Put one on
 your `PATH` and you are done: the engine is a single self-contained
 executable with no runtime dependency beyond `git`.
+
+If you would rather not manage the binary yourself, the npm launcher fetches
+and caches it for you, checksum verified:
+
+```bash
+npx -y navin-engine inspect
+```
+
+From source, with a Rust toolchain:
+
+```bash
+git clone https://github.com/navinspire-ai/navin-engine
+cd navin-engine && cargo build --release
+# the binary is at target/release/navin-engine
+```
 
 ## Use it from your AI coding tool
 
@@ -49,12 +57,15 @@ Register the engine as an MCP server. In Cursor, `.cursor/mcp.json`:
 {
   "mcpServers": {
     "navin-engine": {
-      "command": "navin-engine",
-      "args": ["mcp"]
+      "command": "npx",
+      "args": ["-y", "navin-engine", "mcp"]
     }
   }
 }
 ```
+
+With the binary already on your `PATH`, `"command": "navin-engine"` and
+`"args": ["mcp"]` do the same thing without going through npm.
 
 In Claude Code, one command:
 
