@@ -1,6 +1,15 @@
-# navin-engine
+<h1 align="center">navin-engine</h1>
 
-**Your agent writes the patch. This proves it.**
+<p align="center"><b>Your agent writes the patch. This proves it.</b></p>
+
+<p align="center">
+  <a href="https://github.com/navinspire-ai/navin-engine/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/navinspire-ai/navin-engine/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/navinspire-ai/navin-engine/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/navinspire-ai/navin-engine?color=2ea043&label=release"></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <a href="https://www.rust-lang.org"><img alt="Rust 1.87+" src="https://img.shields.io/badge/rust-1.87%2B-orange.svg"></a>
+  <a href="docs/mcp.md"><img alt="MCP server" src="https://img.shields.io/badge/MCP-stdio-8a63d2.svg"></a>
+  <img alt="Linux, macOS, Windows" src="https://img.shields.io/badge/Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg">
+</p>
 
 An AI coding agent can produce a plausible change in seconds. Nothing in that
 loop tells you whether the service still survives a restart under load, or
@@ -9,14 +18,19 @@ the missing half: it boots your app in a throwaway git worktree, attacks it,
 measures it, applies a candidate patch, measures again, and reports what
 changed with numbers instead of adjectives.
 
-It never edits your workspace. Every experiment happens in a shadow copy, and
-every artefact lands under `.navin/`.
+<p align="center">
+  <img src="assets/demo.svg" width="790"
+       alt="navin-engine measures three candidate patches, rejects the one that breaks a passing test, and proves the winner">
+</p>
 
-```
-$ navin-engine proof
-{ "verdict": "fail", "robustness_score": 40,
-  "faults": [ { "fault": "kill_recovery", "verdict": "fail", ... } ] }
-```
+## AI proposes. Navin proves.
+
+| | |
+| --- | --- |
+| **Isolated** | Every candidate runs in a disposable git worktree. Your working tree is never written to. |
+| **Measured** | Baseline and candidate under identical load, repeated to separate a real gain from noise. |
+| **Regression-gated** | Break one passing test, answer one byte differently on replayed traffic, and the candidate is rejected however fast it is. |
+| **Certified** | An accepted change gets an Ed25519-signed certificate of the measurements that earned it, re-verifiable by anyone. |
 
 - **Zero configuration.** Start command, test command and local URL are
   detected. The URL is not guessed: the app is booted once and watched until
@@ -27,27 +41,22 @@ $ navin-engine proof
 - **Runs anywhere MCP runs.** Cursor, Claude Code, Codex, Gemini CLI,
   OpenCode, Antigravity, Windsurf, or plain shell in CI.
 
-## Install
-
-Prebuilt binaries for Linux, macOS and Windows are attached to each
-[release](https://github.com/navinspire-ai/navin-engine/releases). Put one on
-your `PATH` and you are done: the engine is a single self-contained
-executable with no runtime dependency beyond `git`.
-
-If you would rather not manage the binary yourself, the npm launcher fetches
-and caches it for you, checksum verified:
+## 30-second install
 
 ```bash
 npx -y navin-engine inspect
 ```
 
-From source, with a Rust toolchain:
+That prints what the engine detected about your project, after fetching and
+caching the binary for your platform, checksum verified. No Rust toolchain
+involved.
 
-```bash
-git clone https://github.com/navinspire-ai/navin-engine
-cd navin-engine && cargo build --release
-# the binary is at target/release/navin-engine
-```
+Prefer to own the binary? Prebuilt executables for Linux (x64, ARM64), macOS
+(Apple Silicon, Intel) and Windows are attached to every
+[release](https://github.com/navinspire-ai/navin-engine/releases/latest), each
+with its SHA-256 next to it. Put one on your `PATH` and you are done: nothing
+to install beyond `git`. From source, `cargo build --release` with Rust 1.87
+or newer.
 
 ## Use it from your AI coding tool
 
@@ -73,49 +82,64 @@ In Claude Code, one command:
 claude mcp add navin-engine -- navin-engine mcp
 ```
 
-Every other environment (Codex, Gemini CLI, OpenCode, Antigravity, Windsurf,
-Zed, CI) is covered in [docs/hosts.md](docs/hosts.md), including the timeout
-settings that matter, because a proof takes minutes rather than seconds.
+Codex, Gemini CLI, OpenCode, Antigravity, Windsurf, Zed and CI are covered in
+[docs/hosts.md](docs/hosts.md), including the timeout settings that matter,
+because a proof takes minutes rather than seconds.
 
-### The loop your agent follows
+Then just ask: *"diagnose this service and fix the worst finding"*. The engine
+reports evidence; your agent applies the winner with its own edit tools.
 
-1. `diagnose` - the engine boots the app, breaks it (load, restart,
-   dependency loss), and returns findings with stable ids, a symptom, a root
-   cause and a remediation direction.
+## Real proof
+
+A 50-line catalogue API that rebuilds and re-serialises its payload on every
+request. Three candidates, `optimize --objective p95`, two benchmark windows
+each. Nothing below is illustrative:
+
+```
+baseline                  P95 55.8 ± 1.3 ms    277 RPS   robustness 100/100
+
+cache-the-payload         P95  8.0 ± 2.7 ms   1502 RPS   -85.7%   proven
+drop-half-the-catalogue   P95  8.0 ms         1476 RPS   -85.7%   rejected, a test broke
+shorten-the-sleep         P95 49.6 ± 0.4 ms    310 RPS   -10.9%   beaten
+
+winner   cache-the-payload   -85.7% P95, +441% throughput
+branch   navin/evolve/optimize-p95-1787059566
+proof    Ed25519 certificate: signature_ok, checksum_ok, gate_valid
+```
+
+The second candidate was the interesting one. It hit the same 85.7% by
+returning half the catalogue, and no amount of speed saved it: the project's
+own test suite failed, so the gate threw it out. That is the whole product in
+one line.
+
+## How the loop works
+
+```
+   diagnose            your agent            fix / optimize          promote
+      |                     |                      |                    |
+ boot, attack,        writes 2 to 6         each candidate in      winner on its
+ explain each     ->  independent      ->   its own worktree:  ->  own branch,
+ failure with a       candidates for        proved, tested,        certificate
+ stable id            one finding           benchmarked            signed
+```
+
+1. `diagnose` boots the app, breaks it (load, restart, dependency loss) and
+   returns findings with stable ids, a symptom, a root cause and a remediation
+   direction.
 2. Your agent writes patches for one finding. Independent alternatives, not
    steps of one change.
-3. `fix` - each candidate is applied in its own shadow worktree, re-proved,
-   run against your test suite, and accepted only if it resolves the finding
-   without regressing anything else.
-4. `optimize` - same idea for speed: a baseline, then each variant under
-   identical load, repeated to estimate noise. A variant wins only if it
-   beats the baseline by a margin larger than the noise, keeps the tests
-   green, and answers byte-identically on replayed traffic.
+3. `fix` applies each candidate in its own shadow worktree, re-proves it, runs
+   your test suite, and accepts it only if it resolves the finding without
+   regressing anything else.
+4. `optimize` does the same for speed: a baseline, then each variant under
+   identical load, repeated to estimate noise. A variant wins only if it beats
+   the baseline by more than the noise, keeps the tests green, and answers
+   byte-identically on replayed traffic.
 
-The engine reports evidence; your agent applies the winner with its own edit
-tools. Here is what step 4 looks like on the wire:
+The full wire protocol, argument by argument, is in
+[docs/mcp.md](docs/mcp.md).
 
-```json
-{ "method": "tools/call",
-  "params": { "name": "optimize",
-    "arguments": { "candidates": [ {
-      "id": "drop-fixed-sleep",
-      "rationale": "the handler sleeps 50 ms on every request for no reason",
-      "patch": { "kind": "files",
-                 "edits": [ { "path": "app.py", "contents": "..." } ] } } ] } } }
-```
-
-and what comes back:
-
-```json
-{ "baseline": { "p95_ms": 54.8, "rps": 150.0, "robustness_score": 100 },
-  "variants": [ { "candidate": "drop-fixed-sleep", "gain_percent": 93.5,
-                  "significant": true, "behavior_equivalent": true,
-                  "note": "P95 3.5 ± 0.1 ms, 2083.0 ± 14.1 RPS over 2 windows" } ],
-  "winner": "drop-fixed-sleep", "winner_gain_percent": 93.5 }
-```
-
-### Tools
+## Tools
 
 | Tool | What it does |
 | --- | --- |
@@ -129,6 +153,27 @@ and what comes back:
 | `open_pull_request` | Push a promotion's branch and open a PR carrying its evidence. |
 | `verify_certificate` | Re-check a promotion's gate, checksum and signature. |
 
+## Read it, then ship it
+
+Every report carries the unified `diff` of what each candidate changed,
+rejected ones included, captured with git inside the shadow before it is
+destroyed. A measurement can be reviewed instead of believed.
+
+An accepted change lands on its own branch, never on yours. From there:
+
+```bash
+navin-engine promotions                                # what was accepted, and why
+navin-engine pr --id promo-optimize-p95-1787059566     # push the branch, open the PR
+navin-engine merge --id promo-optimize-p95-1787059566  # or fast-forward locally
+navin-engine rollback --id promo-optimize-p95-1787059566
+```
+
+`pr` opens the pull request with the GitHub CLI when it is installed, and its
+body is the evidence: measured before and after, the gate decision, and the
+command to re-verify the certificate. Without `gh` the branch is still pushed
+and a compare link is handed back, so the last step is one click. No token is
+ever stored.
+
 ## Use it from the shell
 
 Every tool is also a subcommand, printing JSON on stdout and logs on stderr:
@@ -139,21 +184,12 @@ navin-engine proof --profile deep    # robustness verdict
 navin-engine diagnose                # findings
 navin-engine fix --finding crash.load --candidates patches.json
 navin-engine optimize --objective p95 --candidates variants.json
-navin-engine promotions
-navin-engine pr --id promo-crash-load-1730000000       # push + open the PR
-navin-engine merge --id promo-crash-load-1730000000    # fast-forward locally
-navin-engine rollback --id promo-crash-load-1730000000 # inverse commit
 ```
-
-Every report carries the `diff` of what each candidate changed, rejected ones
-included, so nothing has to be accepted on trust. `pr` pushes the promotion
-branch and opens the pull request with the GitHub CLI when it is installed;
-otherwise it still pushes and hands back a compare link.
 
 `--start`, `--url` and `--test` exist for the rare case where detection picks
 the wrong program in a monorepo. You should not need them.
 
-## How it works
+## How it stays safe
 
 **Shadow isolation.** Each run gets a git worktree under `.navin/evolve/`,
 with installed dependencies (`node_modules`, `.venv`, `vendor`) lent by
@@ -162,9 +198,9 @@ worktree is written, and it is destroyed afterwards.
 
 **Detection.** A `Procfile`, unit scripts (`package.json`, `pyproject.toml`,
 `Cargo.toml`, `go.mod`, `pom.xml`, `composer.json`, ...) and a `Makefile` are
-read in that order, and every plausible start command is tried until one
-opens a port. The port is observed from the OS, matched to the process group
-the engine spawned, so a monorepo with several servers cannot confuse it.
+read in that order, and every plausible start command is tried until one opens
+a port. The port is observed from the OS and matched to the process group the
+engine spawned, so a monorepo with several servers cannot confuse it.
 
 **Proof.** Profiles `quick`, `standard` and `deep` inject progressively more
 faults: sustained load, process kill and recovery, dependency loss, resource
@@ -172,14 +208,14 @@ pressure. Each fault checks invariants (did it survive, did it recover, did
 the error rate stay bounded) and the report is only as strong as its weakest
 check.
 
-**Gate.** A candidate is accepted when it resolves the target finding, adds
-no new high-severity finding, keeps the test suite and your declared business
+**Gate.** A candidate is accepted when it resolves the target finding, adds no
+new high-severity finding, keeps the test suite and your declared business
 invariants green, and does not regress latency. Every decision carries its
 reasons.
 
-**Certificates.** An accepted change is committed on its own branch with an
-Ed25519-signed certificate of the measurements that justified it, so a
-promotion can be re-verified later by anyone.
+**Certificates.** An accepted change is committed with an Ed25519-signed
+certificate of the measurements that justified it, so a promotion can be
+re-verified later by anyone: `navin-engine verify-cert . --id <promotion>`.
 
 ## Configuration
 
@@ -198,8 +234,8 @@ command = "npm run test:checkout"
 command = ""           # a program reading a finding on stdin, writing candidates on stdout
 ```
 
-With `enabled = false` (the default) the engine measures and proposes,
-and never touches your branches.
+With `enabled = false` (the default) the engine measures and proposes, and
+never touches your branches.
 
 ## Artefacts
 
@@ -207,7 +243,7 @@ and never touches your branches.
 .navin/
   proofs/<commit>.json        robustness reports
   diagnoses/<commit>.json     findings
-  fixes/<commit>.json         candidate attempts and gate decisions
+  fixes/<commit>.json         candidate attempts, diffs and gate decisions
   optimize/<commit>.json      benchmark runs
   promotions/<id>.json        accepted changes and certificates
   evolve/                     shadow worktrees, daemon socket, state
@@ -221,6 +257,20 @@ or commit the reports if you want proof history in the repository.
 - `git` (shadow worktrees are git worktrees)
 - an app that listens on localhost; probes refuse any other host
 - Linux, macOS or Windows
+
+## Docs
+
+- [docs/hosts.md](docs/hosts.md): wiring into Cursor, Claude Code, Codex,
+  Gemini CLI, OpenCode, Antigravity, Windsurf, Zed, CI.
+- [docs/mcp.md](docs/mcp.md): the MCP protocol, tool by tool.
+- [CHANGELOG.md](CHANGELOG.md): what changed, release by release.
+
+## Contributing
+
+Issues and pull requests are welcome. `cargo test` and
+`cargo clippy --all-targets -- -D warnings` are what CI runs, and both should
+be clean before you open one. New behaviour comes with a test that would fail
+without it.
 
 ## License
 

@@ -138,7 +138,7 @@ globally, `.agents/mcp_config.json` per workspace). Then:
 ```
 
 Antigravity recommends keeping the total number of enabled tools under fifty;
-this server adds eight.
+this server adds nine.
 
 ## Windsurf
 
@@ -168,7 +168,8 @@ navin-engine optimize --candidates variants.json
 ```
 
 Both print JSON on stdout and logs on stderr, which is exactly what an agent
-with a terminal tool needs.
+with a terminal tool needs. The wire-level reference for the MCP side is in
+[mcp.md](mcp.md).
 
 ## In CI
 

@@ -17,16 +17,18 @@
   `open_pull_request`, `verify_certificate`), progress notifications for long
   runs, and candidate patches passed inline so the host's own model is the
   generator.
+- An npm launcher (`npx -y navin-engine mcp`), so an MCP config is one line
+  and no Rust toolchain is needed. It downloads the release binary for the
+  platform once, verifies its SHA-256, and caches it.
+- `README.md`, `docs/hosts.md`, `docs/mcp.md` and a MIT `LICENSE` for
+  standalone use, plus an animated demo built from a real optimize run rather
+  than a mockup.
 
 ### Fixed
 
 - A campaign that was cancelled or crashed left its shadow behind, and every
   later campaign failed with `shadow opt-base already exists` until the daemon
   restarted. Leftovers are now reclaimed and rebuilt from clean code.
-- An npm launcher (`npx -y navin-engine mcp`), so an MCP config is one line
-  and no Rust toolchain is needed. It downloads the release binary for the
-  platform once, verifies its SHA-256, and caches it.
-- `README.md`, `docs/hosts.md` and a MIT `LICENSE` for standalone use.
 
 ## 0.1.0
 
