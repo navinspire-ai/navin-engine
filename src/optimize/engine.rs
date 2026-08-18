@@ -363,11 +363,65 @@ async fn measure_patched(
         (Some(outcome.passed), outcome.failures)
     };
 
+    let config = EvolveConfig::load(project_root).unwrap_or_default();
+    if config.target.is_worker() {
+        // A worker benchmark times `exercise_cmd` instead of HTTP windows;
+        // behavioural fingerprints (an HTTP crawl) do not apply.
+        anyhow::ensure!(
+            !config.target.exercise_cmd.trim().is_empty(),
+            "optimizing a worker needs [target] exercise_cmd in .navin/evolve.toml"
+        );
+        let log_path = crate::engine_dir(project_root).join("logs").join("optimize-service.log");
+        let mut worker = crate::proof::worker::WorkerManager::new(
+            ctx.start_cmd.clone(),
+            guard.path().to_path_buf(),
+            log_path.clone(),
+            config.target.health_cmd.clone(),
+            ctx.ready_timeout,
+            ctx.limits,
+        );
+        worker.start().await?;
+        anyhow::ensure!(worker.is_healthy().await, "worker did not pass its initial health check");
+        let exercise = config.target.exercise_cmd.clone();
+        crate::proof::worker::exercise_stats(
+            &exercise,
+            guard.path(),
+            &log_path,
+            WARMUP_DURATION,
+            ctx.bench_concurrency,
+        )
+        .await;
+        let mut runs = Vec::new();
+        for _ in 0..ctx.bench_repeats.max(1) {
+            runs.push(
+                crate::proof::worker::exercise_stats(
+                    &exercise,
+                    guard.path(),
+                    &log_path,
+                    ctx.bench_duration,
+                    ctx.bench_concurrency,
+                )
+                .await,
+            );
+        }
+        worker.shutdown().await;
+        guard.destroy()?;
+        return Ok(Measurement {
+            runs,
+            tests_passed,
+            invariants_ok,
+            invariant_failures,
+            fingerprints: None,
+            code_diff,
+        });
+    }
+
     let (host, port, path) = parse_http_url(&ctx.url)?;
     anyhow::ensure!(
         matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1"),
         "benchmarks are localhost-only, refusing {host}"
     );
+    let specs = latency::specs_for(&config.target, &path);
     let log_path = crate::engine_dir(project_root).join("logs").join("optimize-service.log");
     let mut svc = ServiceManager::new(
         ctx.start_cmd.clone(),
@@ -375,7 +429,7 @@ async fn measure_patched(
         log_path,
         host.clone(),
         port,
-        path.clone(),
+        specs.clone(),
         ctx.ready_timeout,
         ctx.limits,
     );
@@ -393,11 +447,12 @@ async fn measure_patched(
 
     // Short warmup so cold-start effects do not pollute the first window,
     // then the measured windows themselves.
-    latency::probe(&host, port, &path, WARMUP_DURATION, ctx.bench_concurrency).await;
+    latency::probe_specs(&host, port, &specs, WARMUP_DURATION, ctx.bench_concurrency).await;
     let mut runs = Vec::new();
     for _ in 0..ctx.bench_repeats.max(1) {
         runs.push(
-            latency::probe(&host, port, &path, ctx.bench_duration, ctx.bench_concurrency).await,
+            latency::probe_specs(&host, port, &specs, ctx.bench_duration, ctx.bench_concurrency)
+                .await,
         );
     }
     svc.shutdown().await;

@@ -170,9 +170,11 @@ async fn run_optimize_job(
 }
 
 /// Load the HEAD fix report and its accepted proposal, then promote it.
+/// Without git the report is keyed "workdir" and the promotion lands in a
+/// patch bundle instead of a branch.
 fn promote_from_disk(root: &Path, finding: &str) -> Result<PromotionRecord> {
     let config = EvolveConfig::load(root)?;
-    let commit = promote::git::head_sha(root).context("workspace must be a git repo to promote")?;
+    let commit = promote::git::head_sha(root).unwrap_or_else(|_| "workdir".to_owned());
     let report_path = root.join(".navin/fixes").join(format!("{commit}.json"));
     let report: FixReport = serde_json::from_str(
         &std::fs::read_to_string(&report_path)

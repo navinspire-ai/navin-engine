@@ -12,7 +12,7 @@ use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
-use crate::baseline::latency::probe;
+use crate::baseline::latency::probe_specs;
 
 use super::super::checks::{error_rate, no_crash};
 use super::super::model::{CheckResult, FaultOutcome, Verdict};
@@ -65,13 +65,14 @@ pub async fn run(
     };
 
     // Drive the whole benchmark through the degraded wire.
-    let chaos_stats = probe(&svc.host, proxy_port, &svc.path, duration, concurrency).await;
+    let chaos_stats = probe_specs(&svc.host, proxy_port, &svc.specs, duration, concurrency).await;
     drop(stop); // Closing the channel stops the accept loop.
 
     // The moment the chaos is gone, the service must answer cleanly again.
     let alive = svc.is_healthy().await;
     let direct =
-        probe(&svc.host, svc.port, &svc.path, Duration::from_secs(2), concurrency.min(8)).await;
+        probe_specs(&svc.host, svc.port, &svc.specs, Duration::from_secs(2), concurrency.min(8))
+            .await;
 
     let served = CheckResult::new(
         "served_under_chaos",

@@ -486,8 +486,9 @@ fn main() -> Result<()> {
             let report: FixReport = match fix_report {
                 Some(p) => serde_json::from_str(&std::fs::read_to_string(&p)?)?,
                 None => {
-                    let commit = promote_git::head_sha(&root)
-                        .context("need a git repo (or pass --fix-report)")?;
+                    // Without git, fix reports are keyed "workdir".
+                    let commit =
+                        promote_git::head_sha(&root).unwrap_or_else(|_| "workdir".to_owned());
                     let p = root.join(".navin/fixes").join(format!("{commit}.json"));
                     serde_json::from_str(
                         &std::fs::read_to_string(&p)

@@ -5,7 +5,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crate::baseline::latency::get_once;
+use crate::baseline::latency::{request_once, ProbeSpec};
 use crate::runner::health::wait_for_port;
 use crate::runner::process::SupervisedProcess;
 use crate::runner::supervisor::start_service;
@@ -17,7 +17,9 @@ pub struct ServiceManager {
     pub log_path: PathBuf,
     pub host: String,
     pub port: u16,
-    pub path: String,
+    /// Every request the probes rotate over (the first one doubles as the
+    /// health check). Never empty.
+    pub specs: Vec<ProbeSpec>,
     pub ready_timeout: Duration,
     pub limits: Option<SandboxLimits>,
     process: Option<SupervisedProcess>,
@@ -31,17 +33,18 @@ impl ServiceManager {
         log_path: PathBuf,
         host: String,
         port: u16,
-        path: String,
+        specs: Vec<ProbeSpec>,
         ready_timeout: Duration,
         limits: Option<SandboxLimits>,
     ) -> Self {
+        let specs = if specs.is_empty() { vec![ProbeSpec::get("/")] } else { specs };
         ServiceManager {
             start_cmd,
             work_dir,
             log_path,
             host,
             port,
-            path,
+            specs,
             ready_timeout,
             limits,
             process: None,
@@ -83,9 +86,9 @@ impl ServiceManager {
         self.start().await
     }
 
-    /// A real HTTP GET succeeds (stronger than a bare TCP accept).
+    /// A real HTTP request succeeds (stronger than a bare TCP accept).
     pub async fn is_healthy(&self) -> bool {
-        get_once(&self.host, self.port, &self.path).await.is_ok()
+        request_once(&self.host, self.port, &self.specs[0]).await.is_ok()
     }
 
     /// Poll until healthy or the bound elapses; returns time taken.

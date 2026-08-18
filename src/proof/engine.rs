@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::info;
 
+use crate::baseline::latency::specs_for;
+use crate::policy::config::EvolveConfig;
 use crate::progress::ProgressSink;
 use crate::runner::ports::parse_http_url;
 use crate::shadow::sandbox::SandboxLimits;
@@ -16,6 +18,11 @@ use super::faults::netchaos::ChaosConfig;
 use super::faults::{flood, kill, load, malformed, netchaos, FaultKind};
 use super::model::ProofReport;
 use super::service::ServiceManager;
+use super::worker::WorkerManager;
+
+/// Placeholder URL for `[target] kind = "worker"`: a worker owns no port,
+/// so there is nothing to parse or discover.
+pub const WORKER_URL: &str = "worker://local";
 
 /// What to prove and how hard. Durations scale with the profile.
 #[derive(Debug, Clone)]
@@ -110,11 +117,16 @@ pub async fn run_proof(
     } else {
         "workdir".to_owned()
     };
+    let config = EvolveConfig::load(project_root).unwrap_or_default();
+    if config.target.is_worker() || target.url == WORKER_URL {
+        return run_worker_proof(project_root, target, plan, &config, &commit, sink).await;
+    }
     let (host, port, path) = parse_http_url(&target.url)?;
     anyhow::ensure!(
         matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1"),
         "proof probes are localhost-only, refusing {host}"
     );
+    let specs = specs_for(&config.target, &path);
 
     let log_path = crate::engine_dir(project_root).join("logs").join("proof-service.log");
     let mut svc = ServiceManager::new(
@@ -123,7 +135,7 @@ pub async fn run_proof(
         log_path,
         host,
         port,
-        path,
+        specs,
         target.ready_timeout,
         target.limits,
     );
@@ -180,6 +192,90 @@ pub async fn run_proof(
 
     svc.shutdown().await;
     let report = ProofReport::build(&commit, &plan.profile, &target.work_dir, outcomes, Vec::new());
+    sink.emit(
+        "proof",
+        "completed",
+        json!({ "verdict": report.verdict, "score": report.robustness_score }),
+    );
+    Ok(report)
+}
+
+/// Proof for a port-less worker (`[target] kind = "worker"`). Only the
+/// faults that mean something without a socket run - load (through
+/// `exercise_cmd`) and kill/recovery - and the wire-level faults are
+/// recorded as skipped rather than silently dropped.
+async fn run_worker_proof(
+    project_root: &Path,
+    target: &ProofTarget,
+    plan: &ProofPlan,
+    config: &EvolveConfig,
+    commit: &str,
+    sink: &dyn ProgressSink,
+) -> Result<ProofReport> {
+    let log_path = crate::engine_dir(project_root).join("logs").join("proof-service.log");
+    let mut worker = WorkerManager::new(
+        target.start_cmd.clone(),
+        target.work_dir.clone(),
+        log_path,
+        config.target.health_cmd.clone(),
+        target.ready_timeout,
+        target.limits,
+    );
+
+    let applicable: Vec<FaultKind> = plan
+        .faults
+        .iter()
+        .copied()
+        .filter(|fault| matches!(fault, FaultKind::Load | FaultKind::KillRecovery))
+        .collect();
+    let mut notes = vec!["worker target: health = process + health_cmd, load = exercise_cmd".to_owned()];
+    for fault in &plan.faults {
+        if !applicable.contains(fault) {
+            notes.push(format!(
+                "fault `{}` skipped: it needs a network socket, which a worker does not have",
+                fault.as_str()
+            ));
+        }
+    }
+
+    info!("proof(worker): starting ({})", target.start_cmd);
+    sink.emit(
+        "proof",
+        "started",
+        json!({ "profile": plan.profile, "faults": applicable.len(), "target": "worker" }),
+    );
+    worker.start().await?;
+    anyhow::ensure!(worker.is_healthy().await, "worker did not pass its initial health check");
+    sink.emit("proof", "ready", json!({ "url": WORKER_URL }));
+
+    let mut outcomes = Vec::new();
+    for fault in &applicable {
+        info!("proof(worker): injecting {}", fault.as_str());
+        sink.emit("proof", "fault_started", json!({ "fault": fault.as_str() }));
+        let outcome = match fault {
+            FaultKind::Load => {
+                super::worker::run_load(
+                    &mut worker,
+                    &config.target.exercise_cmd,
+                    plan.load_duration,
+                    plan.load_concurrency,
+                    plan.max_error_ratio,
+                    plan.rss_limit_mb,
+                )
+                .await
+            }
+            _ => super::worker::run_kill_recovery(&mut worker, plan.recovery_bound).await,
+        };
+        sink.emit(
+            "proof",
+            "fault_done",
+            json!({ "fault": &outcome.fault, "verdict": outcome.verdict }),
+        );
+        outcomes.push(outcome);
+    }
+
+    worker.shutdown().await;
+    let report = ProofReport::build(commit, &plan.profile, &target.work_dir, outcomes, notes);
     sink.emit(
         "proof",
         "completed",

@@ -50,6 +50,15 @@ pub async fn resolve(
         root.display()
     );
 
+    // A worker owns no port: there is no URL to discover, health and load
+    // go through the commands declared in `[target]`.
+    let config = crate::policy::config::EvolveConfig::load(root).unwrap_or_default();
+    if config.target.is_worker() {
+        let url = crate::proof::WORKER_URL.to_owned();
+        sink.emit("target", "resolved", serde_json::json!({ "url": url, "source": "worker" }));
+        return Ok(Target { start_cmd: candidates[0].clone(), url, discovered: false });
+    }
+
     if let Some(url) = url {
         return Ok(Target { start_cmd: candidates[0].clone(), url, discovered: false });
     }

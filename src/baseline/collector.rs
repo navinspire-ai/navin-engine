@@ -6,6 +6,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tracing::info;
 
+use crate::policy::config::EvolveConfig;
 use crate::runner::logs::tail;
 use crate::runner::ports::parse_http_url;
 use crate::runner::process::SupervisedProcess;
@@ -14,7 +15,7 @@ use crate::shadow::sandbox::SandboxLimits;
 use crate::shadow::worktree;
 
 use super::cpu::CpuSampler;
-use super::latency::probe;
+use super::latency::{probe_specs, specs_for};
 use super::memory::MemorySampler;
 use super::report::BaselineReport;
 
@@ -78,6 +79,13 @@ pub async fn collect_baseline(
         report.save(project_root)?;
         return Ok(report);
     };
+
+    let config = EvolveConfig::load(project_root).unwrap_or_default();
+    if config.target.is_worker() {
+        return collect_worker_baseline(project_root, work_dir, opts, &config, report, start_cmd)
+            .await;
+    }
+
     let Some(url) = &opts.url else {
         report.notes.push("startup/latency not measured: no probe URL".to_owned());
         report.save(project_root)?;
@@ -88,8 +96,9 @@ pub async fn collect_baseline(
         matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1"),
         "baseline probes are localhost-only, refusing {host}"
     );
+    let specs = specs_for(&config.target, &path);
 
-    info!("baseline: start ({start_cmd}) then probe {url}");
+    info!("baseline: start ({start_cmd}) then probe {url} ({} routes)", specs.len());
     let log = logs_dir.join("baseline-service.log");
     let spawn_started = Instant::now();
     let handle = start_service(start_cmd, work_dir, &log, port, opts.ready_timeout, opts.limits).await?;
@@ -98,7 +107,7 @@ pub async fn collect_baseline(
     // Sample CPU/RSS in parallel with the latency probe.
     let pid = handle.process.pid;
     let sampling = tokio::spawn(sample_resources(pid, opts.probe_duration));
-    let latency = probe(&host, port, &path, opts.probe_duration, opts.probe_concurrency).await;
+    let latency = probe_specs(&host, port, &specs, opts.probe_duration, opts.probe_concurrency).await;
     report.latency = Some(latency);
     if let Ok((cpu_avg, rss_peak)) = sampling.await {
         report.cpu_percent_avg = cpu_avg;
@@ -106,6 +115,59 @@ pub async fn collect_baseline(
     }
 
     handle.process.kill_tree().await?;
+    report.save(project_root)?;
+    Ok(report)
+}
+
+/// Baseline for a port-less worker: startup is the boot grace, "latency"
+/// is the timed `exercise_cmd`, resources are sampled the same way.
+async fn collect_worker_baseline(
+    project_root: &Path,
+    work_dir: &Path,
+    opts: &BaselineOptions,
+    config: &EvolveConfig,
+    mut report: BaselineReport,
+    start_cmd: &str,
+) -> Result<BaselineReport> {
+    use crate::proof::worker::{exercise_stats, WorkerManager};
+
+    let log = crate::engine_dir(project_root).join("logs").join("baseline-service.log");
+    let mut worker = WorkerManager::new(
+        start_cmd.to_owned(),
+        work_dir.to_path_buf(),
+        log.clone(),
+        config.target.health_cmd.clone(),
+        opts.ready_timeout,
+        opts.limits,
+    );
+    info!("baseline(worker): start ({start_cmd})");
+    let startup = worker.start().await?;
+    report.startup_ms = Some(startup.as_millis() as u64);
+    anyhow::ensure!(worker.is_healthy().await, "worker did not pass its initial health check");
+
+    if config.target.exercise_cmd.trim().is_empty() {
+        report
+            .notes
+            .push("latency not measured: no [target] exercise_cmd declared".to_owned());
+    } else {
+        let pid = worker.pid().unwrap_or(0);
+        let sampling = tokio::spawn(sample_resources(pid, opts.probe_duration));
+        let latency = exercise_stats(
+            &config.target.exercise_cmd,
+            work_dir,
+            &log,
+            opts.probe_duration,
+            opts.probe_concurrency,
+        )
+        .await;
+        report.latency = Some(latency);
+        if let Ok((cpu_avg, rss_peak)) = sampling.await {
+            report.cpu_percent_avg = cpu_avg;
+            report.rss_mb_peak = rss_peak.map(|bytes| bytes / (1024 * 1024));
+        }
+    }
+
+    worker.shutdown().await;
     report.save(project_root)?;
     Ok(report)
 }

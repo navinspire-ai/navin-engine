@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::baseline::latency::probe;
+use crate::baseline::latency::probe_specs;
 use crate::baseline::memory::MemorySampler;
 
 use super::super::checks::{error_rate, no_crash, resource_bound};
@@ -35,7 +35,7 @@ pub async fn run(
         })
     });
 
-    let stats = probe(&svc.host, svc.port, &svc.path, duration, concurrency).await;
+    let stats = probe_specs(&svc.host, svc.port, &svc.specs, duration, concurrency).await;
     let rss_peak_mb = match sampler {
         Some(handle) => handle.await.unwrap_or(0),
         None => 0,

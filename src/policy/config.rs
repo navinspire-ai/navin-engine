@@ -1,11 +1,13 @@
 //! `.navin/evolve.toml` with safe defaults.
 //!
-//! Safe mode is the default: nothing is auto-merged, destructive families
+//! Safe mode is the default: promotions land on their own branch (or in a
+//! patch bundle without git), nothing is auto-merged, destructive families
 //! are off, and resource ceilings are conservative. A missing file means
 //! defaults; a broken file is an error rather than silently permissive.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::NAVIN_DIR;
@@ -17,6 +19,10 @@ pub const CONFIG_FILE: &str = "evolve.toml";
 pub struct EvolveConfig {
     pub proof: ProofSection,
     pub evolve: EvolveSection,
+    /// What the engine measures and how it talks to it. Everything here is
+    /// optional: without it the target is an HTTP service probed with one
+    /// GET on the discovered URL, exactly as before.
+    pub target: TargetSection,
     /// Business invariants: commands that must exit 0 for a candidate to be
     /// promotable. They run inside the shadow, after the test suite.
     ///
@@ -26,6 +32,83 @@ pub struct EvolveConfig {
     /// command = "python verify_payments.py"
     /// ```
     pub invariants: Vec<InvariantSpec>,
+    /// Project-specific log signatures, matched next to the built-in
+    /// catalogue during diagnosis. A signature the built-ins do not know
+    /// stops being invisible the day you declare it here.
+    ///
+    /// ```toml
+    /// [[signatures]]
+    /// marker = "circuit breaker open"
+    /// id = "breaker_open"
+    /// family = "reliability"
+    /// cause = "the payment circuit breaker tripped under load"
+    /// ```
+    pub signatures: Vec<SignatureSpec>,
+}
+
+/// How to reach and exercise the application under test.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TargetSection {
+    /// "http" (default): a service answering on a local port.
+    /// "worker": a long-running process with no port (queue consumer, CLI
+    /// daemon, cron worker). Health is process liveness plus `health_cmd`.
+    pub kind: String,
+    /// Extra URL paths probed alongside the target URL, so load and
+    /// benchmarks exercise more than one route.
+    pub probe_paths: Vec<String>,
+    /// Headers added to every probe (e.g. an Authorization token for an
+    /// authenticated API). Host, Connection and Content-Length are managed
+    /// by the prober and cannot be overridden.
+    pub probe_headers: BTreeMap<String, String>,
+    /// HTTP method for the probes; empty means GET.
+    pub probe_method: String,
+    /// Request body sent with every probe (POST/PUT payloads).
+    pub probe_body: String,
+    /// Worker targets: a command whose exit 0 means "healthy".
+    pub health_cmd: String,
+    /// Worker targets: one unit of work. Load and benchmarks run it
+    /// concurrently and time each invocation, which is what makes a CLI
+    /// or a port-less worker measurable.
+    pub exercise_cmd: String,
+}
+
+impl Default for TargetSection {
+    fn default() -> Self {
+        TargetSection {
+            kind: "http".to_owned(),
+            probe_paths: Vec::new(),
+            probe_headers: BTreeMap::new(),
+            probe_method: String::new(),
+            probe_body: String::new(),
+            health_cmd: String::new(),
+            exercise_cmd: String::new(),
+        }
+    }
+}
+
+impl TargetSection {
+    pub fn is_worker(&self) -> bool {
+        self.kind.eq_ignore_ascii_case("worker")
+    }
+}
+
+/// A project-declared log signature (matched as a lowercased substring,
+/// like the built-in catalogue: predictable and dependency-free).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignatureSpec {
+    /// Substring searched for in each lowercased log line.
+    pub marker: String,
+    /// Stable slug for the finding id (`log.<id>`).
+    pub id: String,
+    #[serde(default = "default_signature_family")]
+    pub family: String,
+    /// The root cause this signature points at, in one sentence.
+    pub cause: String,
+}
+
+fn default_signature_family() -> String {
+    "reliability".to_owned()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,7 +153,11 @@ pub struct EvolveSection {
 impl Default for EvolveSection {
     fn default() -> Self {
         EvolveSection {
-            enabled: false,
+            // Enabled out of the box: in safe mode a promotion only ever
+            // creates a branch (or a patch bundle), never merges, so the
+            // default is useful without being destructive. `enabled = false`
+            // turns the engine back into a pure measuring instrument.
+            enabled: true,
             mode: "safe".to_owned(),
             allowed: AllowedFamilies::default(),
             promotion: PromotionSection::default(),
@@ -192,11 +279,60 @@ mod tests {
     #[test]
     fn defaults_are_safe() {
         let config = EvolveConfig::default();
+        // Enabled by default, but safe mode never merges anything.
+        assert!(config.evolve.enabled);
         assert_eq!(config.evolve.mode, "safe");
         assert!(!config.evolve.promotion.auto_merge);
         assert!(!config.evolve.allowed.security);
         assert!(!config.evolve.allowed.dependencies);
         assert_eq!(config.evolve.resources.max_cpu_percent, 15);
+        assert_eq!(config.target.kind, "http");
+        assert!(!config.target.is_worker());
+        assert!(config.signatures.is_empty());
+    }
+
+    #[test]
+    fn target_section_is_parsed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let navin = tmp.path().join(NAVIN_DIR);
+        std::fs::create_dir_all(&navin).unwrap();
+        std::fs::write(
+            navin.join(CONFIG_FILE),
+            "[target]\nkind = \"worker\"\nhealth_cmd = \"redis-cli ping\"\n\
+             exercise_cmd = \"python worker_job.py\"\n\
+             probe_paths = [\"/health\", \"/api/items\"]\n\
+             probe_method = \"POST\"\nprobe_body = \"{}\"\n\
+             [target.probe_headers]\nAuthorization = \"Bearer token\"\n",
+        )
+        .unwrap();
+
+        let config = EvolveConfig::load(tmp.path()).unwrap();
+        assert!(config.target.is_worker());
+        assert_eq!(config.target.health_cmd, "redis-cli ping");
+        assert_eq!(config.target.probe_paths, vec!["/health", "/api/items"]);
+        assert_eq!(config.target.probe_method, "POST");
+        assert_eq!(
+            config.target.probe_headers.get("Authorization").map(String::as_str),
+            Some("Bearer token")
+        );
+    }
+
+    #[test]
+    fn custom_signatures_are_parsed_with_a_default_family() {
+        let tmp = tempfile::tempdir().unwrap();
+        let navin = tmp.path().join(NAVIN_DIR);
+        std::fs::create_dir_all(&navin).unwrap();
+        std::fs::write(
+            navin.join(CONFIG_FILE),
+            "[[signatures]]\nmarker = \"circuit breaker open\"\nid = \"breaker\"\n\
+             cause = \"the breaker tripped\"\n",
+        )
+        .unwrap();
+
+        let config = EvolveConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.signatures.len(), 1);
+        assert_eq!(config.signatures[0].id, "breaker");
+        assert_eq!(config.signatures[0].family, "reliability");
     }
 
     #[test]

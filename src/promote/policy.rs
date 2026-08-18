@@ -78,8 +78,16 @@ mod tests {
 
     #[test]
     fn disabled_policy_blocks_everything() {
-        let c = EvolveConfig::default(); // enabled = false
+        let mut c = EvolveConfig::default();
+        c.evolve.enabled = false;
         assert!(matches!(decide(&c, "reliability", true), PolicyDecision::Blocked(_)));
+    }
+
+    #[test]
+    fn the_default_policy_is_branch_only() {
+        // Enabled out of the box, but safe mode never merges.
+        let c = EvolveConfig::default();
+        assert!(matches!(decide(&c, "reliability", true), PolicyDecision::BranchOnly(_)));
     }
 
     #[test]

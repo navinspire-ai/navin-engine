@@ -29,7 +29,7 @@ pub fn incidental_findings(symptoms: &[Symptom], signals: &[SignalHit]) -> Vec<F
         .collect();
     signals
         .iter()
-        .filter(|hit| !symptomatic_families.contains(&hit.id))
+        .filter(|hit| !symptomatic_families.contains(&hit.id.as_str()))
         .map(|hit| Finding {
             id: format!("log.{}", hit.id),
             title: format!("Log signal: {}", hit.cause),

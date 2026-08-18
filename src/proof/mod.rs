@@ -8,8 +8,9 @@ pub mod engine;
 pub mod faults;
 pub mod model;
 pub mod service;
+pub mod worker;
 
-pub use engine::{run_proof, run_proof_in_shadow, ProofPlan, ProofTarget};
+pub use engine::{run_proof, run_proof_in_shadow, ProofPlan, ProofTarget, WORKER_URL};
 pub use model::{ProofReport, Verdict};
 
 /// Seconds since the Unix epoch, tagged, matching the baseline reports.

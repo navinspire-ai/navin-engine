@@ -35,11 +35,16 @@ changed with numbers instead of adjectives.
 - **Zero configuration.** Start command, test command and local URL are
   detected. The URL is not guessed: the app is booted once and watched until
   it opens a port.
+- **Any local target.** HTTP services out of the box - several routes, POST
+  bodies and auth headers via `[target]` - and port-less workers or CLIs
+  through `kind = "worker"`, where every timed invocation of your
+  `exercise_cmd` is a data point.
 - **No model, no API key.** The engine measures and gates; where candidate
   patches come from is your choice. In an AI coding tool, they come from the
   model you are already talking to.
 - **Runs anywhere MCP runs.** Cursor, Claude Code, Codex, Gemini CLI,
-  OpenCode, Antigravity, Windsurf, or plain shell in CI.
+  OpenCode, Antigravity, Windsurf, or plain shell in CI. Born inside the
+  Navin desktop app, extracted so any project can embed it.
 
 ## 30-second install
 
@@ -159,7 +164,9 @@ Every report carries the unified `diff` of what each candidate changed,
 rejected ones included, captured with git inside the shadow before it is
 destroyed. A measurement can be reviewed instead of believed.
 
-An accepted change lands on its own branch, never on yours. From there:
+An accepted change lands on its own branch, never on yours (without git, it
+lands in a patch bundle under `.navin/promotions/<id>/` with the new files
+next to the current ones they replace). From there:
 
 ```bash
 navin-engine promotions                                # what was accepted, and why
@@ -213,6 +220,12 @@ new high-severity finding, keeps the test suite and your declared business
 invariants green, and does not regress latency. Every decision carries its
 reasons.
 
+**Diagnosis.** Failures are explained by correlating proof checks with a
+catalogue of log signatures (panics, OOM, port conflicts, fd exhaustion,
+resets, SQLite contention, stack overflows, ...). The catalogue is yours to
+extend: `[[signatures]]` entries in `.navin/evolve.toml` turn any log line
+your app can produce into a finding with a stable id.
+
 **Certificates.** An accepted change is committed with an Ed25519-signed
 certificate of the measurements that justified it, so a promotion can be
 re-verified later by anyone: `navin-engine verify-cert . --id <promotion>`.
@@ -224,18 +237,51 @@ for the parts only you can decide:
 
 ```toml
 [evolve]
-enabled = false        # true lets the engine open branches for accepted changes
+enabled = true         # default: accepted changes land on their own branch
+                       # (or in a patch bundle without git); false = measure only
+
+[target]               # optional: what the probes exercise
+probe_paths = ["/health", "/api/items"]   # extra routes probed in rotation
+probe_method = "POST"                     # default GET
+probe_body = '{"q": "test"}'
+[target.probe_headers]
+Authorization = "Bearer test-token"       # authenticated APIs are fair game
 
 [[invariants]]         # business truths that must survive every patch
 name = "checkout works"
 command = "npm run test:checkout"
 
+[[signatures]]         # your own log signatures, next to the built-ins
+marker = "circuit breaker open"
+id = "breaker_open"
+family = "reliability"
+cause = "the payment circuit breaker tripped under load"
+
 [evolve.generator]     # optional: your own candidate generator
 command = ""           # a program reading a finding on stdin, writing candidates on stdout
 ```
 
-With `enabled = false` (the default) the engine measures and proposes, and
-never touches your branches.
+Promotions never merge by themselves in the default safe mode: an accepted
+change becomes a branch to review. Set `enabled = false` to forbid even that
+and keep the engine a pure measuring instrument.
+
+### Workers and CLIs (no port)
+
+A queue consumer, a cron worker or a CLI daemon has no URL to probe. Declare
+it and it becomes measurable anyway:
+
+```toml
+[target]
+kind = "worker"
+health_cmd = "redis-cli ping"          # exit 0 = healthy (optional)
+exercise_cmd = "python enqueue_one.py" # one unit of work, timed under load
+```
+
+Health is process liveness plus `health_cmd`. Load runs `exercise_cmd` in
+concurrent loops and times every invocation, so `optimize` compares variants
+of a worker with the same statistics it uses for HTTP latency. Wire-level
+faults (malformed input, connection floods, network chaos) are recorded as
+skipped rather than silently dropped.
 
 ## Artefacts
 
@@ -256,9 +302,14 @@ you want proof history in the repository.
 
 ## Requirements
 
-- `git` (shadow worktrees are git worktrees)
-- an app that listens on localhost; probes refuse any other host
 - Linux, macOS or Windows
+- an app that runs on this machine: an HTTP service on localhost (probes
+  refuse any other host, by design - chaos belongs in a sandbox, not in
+  production) or a port-less worker via `[target] kind = "worker"`
+- `git` is recommended, not required: with it, shadows are worktrees and
+  accepted changes become branches; without it, shadows fall back to a copy
+  and accepted changes become reviewable patch bundles under
+  `.navin/promotions/`
 
 ## Docs
 
