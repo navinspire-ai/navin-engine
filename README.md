@@ -272,6 +272,24 @@ Issues and pull requests are welcome. `cargo test` and
 be clean before you open one. New behaviour comes with a test that would fail
 without it.
 
+## Team
+
+navin-engine is built at [Navinspire IA](https://navinspire.ai).
+
+<p>
+  <a href="https://github.com/aymenghad"><img src="https://github.com/aymenghad.png?size=96" width="48" height="48" alt="aymenghad"></a>
+  <a href="https://github.com/anisf"><img src="https://github.com/anisf.png?size=96" width="48" height="48" alt="anisf"></a>
+  <a href="https://github.com/Amira-ben-henda-eiagen"><img src="https://github.com/Amira-ben-henda-eiagen.png?size=96" width="48" height="48" alt="Amira-ben-henda-eiagen"></a>
+  <a href="https://github.com/hasseniImen"><img src="https://github.com/hasseniImen.png?size=96" width="48" height="48" alt="hasseniImen"></a>
+  <a href="https://github.com/maryem955"><img src="https://github.com/maryem955.png?size=96" width="48" height="48" alt="maryem955"></a>
+  <a href="https://github.com/medkhalilklai"><img src="https://github.com/medkhalilklai.png?size=96" width="48" height="48" alt="medkhalilklai"></a>
+  <a href="https://github.com/SkanderBS2024"><img src="https://github.com/SkanderBS2024.png?size=96" width="48" height="48" alt="SkanderBS2024"></a>
+  <a href="https://github.com/yosra-wanen"><img src="https://github.com/yosra-wanen.png?size=96" width="48" height="48" alt="yosra-wanen"></a>
+  <a href="https://github.com/nabilmersni2"><img src="https://github.com/nabilmersni2.png?size=96" width="48" height="48" alt="nabilmersni2"></a>
+</p>
+
+[aymenghad](https://github.com/aymenghad) · [anisf](https://github.com/anisf) · [Amira-ben-henda-eiagen](https://github.com/Amira-ben-henda-eiagen) · [hasseniImen](https://github.com/hasseniImen) · [maryem955](https://github.com/maryem955) · [medkhalilklai](https://github.com/medkhalilklai) · [SkanderBS2024](https://github.com/SkanderBS2024) · [yosra-wanen](https://github.com/yosra-wanen) · [nabilmersni2](https://github.com/nabilmersni2)
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
