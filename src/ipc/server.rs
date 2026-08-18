@@ -149,3 +149,10 @@ pub async fn call(engine_dir: &Path, method: &str, params: Value) -> Result<Valu
     }
     anyhow::bail!("daemon closed the connection without answering")
 }
+
+/// The client half of the same gap as `serve` above: without it the Windows
+/// binary does not link at all, which is a worse answer than this sentence.
+#[cfg(not(unix))]
+pub async fn call(_engine_dir: &Path, _method: &str, _params: Value) -> Result<Value> {
+    anyhow::bail!("the daemon currently supports Unix sockets only; Windows named pipes land with the Windows build")
+}
