@@ -410,6 +410,7 @@ fn main() -> Result<()> {
                 &plan,
                 Duration::from_secs(60),
                 None,
+                false,
                 &NoopSink,
             ))?;
             report.save(&root)?;
@@ -437,6 +438,7 @@ fn main() -> Result<()> {
                     &plan,
                     Duration::from_secs(60),
                     None,
+                    false,
                     &NoopSink,
                 ))?;
                 proof.save(&root)?;

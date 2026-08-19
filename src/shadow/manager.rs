@@ -43,6 +43,18 @@ impl ShadowManager {
     }
 
     pub fn create(&self, run_id: &str) -> Result<Shadow> {
+        self.create_inner(run_id, false)
+    }
+
+    /// Like [`ShadowManager::create`], but the shadow also carries the
+    /// project's uncommitted state (staged, unstaged and untracked files).
+    /// This is how a pending fix gets proved under load before it is
+    /// accepted or committed. Copy-mode shadows already are the live tree.
+    pub fn create_with_uncommitted(&self, run_id: &str) -> Result<Shadow> {
+        self.create_inner(run_id, true)
+    }
+
+    fn create_inner(&self, run_id: &str, include_uncommitted: bool) -> Result<Shadow> {
         anyhow::ensure!(
             !run_id.is_empty() && run_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
             "run id must be alphanumeric/dashes"
@@ -63,6 +75,11 @@ impl ShadowManager {
         if worktree::is_git_repo(&self.project_root) {
             let sha = worktree::head_sha(&self.project_root)?;
             worktree::add_worktree(&self.project_root, &dest, &sha)?;
+            if include_uncommitted {
+                let carried = worktree::apply_uncommitted(&self.project_root, &dest)
+                    .context("cannot carry uncommitted changes into the shadow")?;
+                info!("shadow {run_id} carries {carried} uncommitted file(s)");
+            }
             let lent = deps::lend_installed(&self.project_root, &dest);
             info!(
                 "shadow {run_id} created (worktree @ {}, {lent} dependency folders lent)",
@@ -163,6 +180,27 @@ mod tests {
 
         shadow.destroy().unwrap();
         assert!(manager.list().is_empty());
+    }
+
+    #[test]
+    fn a_dirty_shadow_carries_the_pending_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        std::fs::write(tmp.path().join("app.txt"), "uncommitted fix").unwrap();
+        let manager = ShadowManager::new(tmp.path());
+
+        // A plain shadow pins HEAD, so it must NOT see the pending edit.
+        let clean = manager.create("clean-run").unwrap();
+        assert_eq!(std::fs::read_to_string(clean.path.join("app.txt")).unwrap(), "v1");
+        clean.destroy().unwrap();
+
+        // The dirty shadow is what "prove this change" runs against.
+        let dirty = manager.create_with_uncommitted("dirty-run").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dirty.path.join("app.txt")).unwrap(),
+            "uncommitted fix"
+        );
+        dirty.destroy().unwrap();
     }
 
     #[test]

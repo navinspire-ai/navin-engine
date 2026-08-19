@@ -343,6 +343,9 @@ async fn run_job(job: &Job, sink: &BusSink) -> Result<serde_json::Value, String>
                 .and_then(|v| v.as_str())
                 .unwrap_or("standard")
                 .to_owned();
+            // `dirty` proves the working tree as it stands (pending fixes
+            // included) instead of the last commit: "prove this change".
+            let dirty = job.params.get("dirty").and_then(|v| v.as_bool()).unwrap_or(false);
             match job_target(&root, &job.params, sink).await {
                 Ok(target) => {
                     let plan = crate::proof::ProofPlan::for_profile(&profile, 512);
@@ -355,6 +358,7 @@ async fn run_job(job: &Job, sink: &BusSink) -> Result<serde_json::Value, String>
                         &plan,
                         std::time::Duration::from_secs(60),
                         None,
+                        dirty,
                         sink,
                     )
                     .await
@@ -393,6 +397,7 @@ async fn run_job(job: &Job, sink: &BusSink) -> Result<serde_json::Value, String>
                         &plan,
                         std::time::Duration::from_secs(60),
                         None,
+                        false,
                         sink,
                     )
                     .await

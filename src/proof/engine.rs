@@ -285,6 +285,8 @@ async fn run_worker_proof(
 }
 
 /// Full isolated proof: create a shadow, prove inside it, destroy it.
+/// With `include_uncommitted`, the shadow carries the project's pending
+/// (uncommitted) state, so a proposed fix is proved before merge.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_proof_in_shadow(
     project_root: &Path,
@@ -294,10 +296,16 @@ pub async fn run_proof_in_shadow(
     plan: &ProofPlan,
     ready_timeout: Duration,
     limits: Option<SandboxLimits>,
+    include_uncommitted: bool,
     sink: &dyn ProgressSink,
 ) -> Result<ProofReport> {
     let manager = crate::shadow::ShadowManager::new(project_root);
-    let guard = crate::shadow::cleanup::CleanupGuard::new(manager.create(run_id)?);
+    let shadow = if include_uncommitted {
+        manager.create_with_uncommitted(run_id)?
+    } else {
+        manager.create(run_id)?
+    };
+    let guard = crate::shadow::cleanup::CleanupGuard::new(shadow);
     let target = ProofTarget {
         start_cmd: start_cmd.to_owned(),
         url: url.to_owned(),

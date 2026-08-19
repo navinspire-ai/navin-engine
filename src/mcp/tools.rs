@@ -449,6 +449,7 @@ async fn run_proof(
         &plan,
         Duration::from_secs(60),
         None,
+        false,
         sink,
     )
     .await
