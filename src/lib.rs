@@ -32,7 +32,7 @@ pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The engine's private directory inside a project workspace.
 pub const NAVIN_DIR: &str = ".navin";
 
-/// Subdirectory of [`NAVIN_DIR`] holding engine state (socket, db, runs).
+/// Subdirectory of [`NAVIN_DIR`] holding engine state (endpoint, db, runs).
 pub const EVOLVE_DIR: &str = "evolve";
 
 use std::path::{Path, PathBuf};

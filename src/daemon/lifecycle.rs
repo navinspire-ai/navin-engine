@@ -1,6 +1,6 @@
 //! Daemon lifecycle: wire storage, scheduler, worker and IPC together,
-//! run until a shutdown signal, then clean up (socket removed, jobs
-//! drained, SQLite closed).
+//! run until a shutdown signal, then clean up (endpoint file retracted,
+//! jobs drained, SQLite closed).
 
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -139,7 +139,7 @@ pub async fn run_daemon(root: &Path) -> Result<()> {
         _ = tokio::signal::ctrl_c() => {
             info!("shutdown requested");
             let _ = shutdown_tx.send(true);
-            // Give the server a moment to unlink the socket.
+            // Give the server a moment to retract the endpoint file.
             let _ = tokio::time::timeout(std::time::Duration::from_secs(2), serve).await;
         }
     }

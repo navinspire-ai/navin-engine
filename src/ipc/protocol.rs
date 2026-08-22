@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Bumped only on breaking protocol changes; reported in `engine.status`.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// 2: loopback TCP with a token in the endpoint file, replacing the Unix
+/// socket. A version-1 client neither finds the socket nor authenticates.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
@@ -17,6 +20,11 @@ pub struct Request {
     pub method: String,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub params: Value,
+    /// The secret from `.navin/evolve/endpoint.json`, proving the client can
+    /// read the workspace. Required on the first frame of a connection and
+    /// ignored afterwards, so a one-shot call stays a single round trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +49,8 @@ pub enum RpcErrorCode {
     InvalidParams,
     Internal,
     Busy,
+    /// The connection did not present the endpoint token.
+    Unauthorized,
 }
 
 impl Response {
